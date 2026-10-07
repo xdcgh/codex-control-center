@@ -69,7 +69,7 @@ async fn request(service:&Service,method:&str,params:Value)->Result<Value,String
 }
 
 async fn ensure_owner(app:&tauri::AppHandle)->Result<(),String>{
-    let service=app.state::<Service>();
+    let service=app.try_state::<Service>().ok_or("app-starting")?;
     if request(&service,"snapshot",json!({})).await.is_ok(){return Ok(());}
     let config=config_value(&service)?;
     if let Some(legacy)=config["legacyStateDirectory"].as_str(){
@@ -98,11 +98,11 @@ async fn ensure_owner(app:&tauri::AppHandle)->Result<(),String>{
 }
 
 #[tauri::command]
-async fn core_request(app:tauri::AppHandle,method:String,params:Option<Value>)->Result<Value,String>{request(&app.state::<Service>(),&method,params.unwrap_or(json!({}))).await}
+async fn core_request(app:tauri::AppHandle,method:String,params:Option<Value>)->Result<Value,String>{for _ in 0..200{if let Some(service)=app.try_state::<Service>(){return request(&service,&method,params.unwrap_or(json!({}))).await;}tokio::time::sleep(Duration::from_millis(50)).await;}Err("app-starting-timeout".into())}
 
 #[tauri::command]
 fn ui_preferences(app:tauri::AppHandle,update:Option<Value>)->Result<Value,String>{
- let service=app.state::<Service>();let mut prefs=service.preferences.lock().map_err(|_|"preferences-lock-failed")?;
+ let service=app.try_state::<Service>().ok_or("app-starting")?;let mut prefs=service.preferences.lock().map_err(|_|"preferences-lock-failed")?;
  if let Some(value)=update {let object=value.as_object().ok_or("invalid-preferences")?;let current=prefs.as_object_mut().ok_or("invalid-preferences")?;for(key,value)in object{if !["theme","privacy","widgetExpanded","widgetLocked","widgetOpacity","widgetPinned","notifications","widgetVisible"].contains(&key.as_str()){return Err("unknown-preference".into());}current.insert(key.clone(),value.clone());}
  if !service.preferences_file.as_os_str().is_empty(){fs::create_dir_all(service.preferences_file.parent().ok_or("preferences-parent-missing")?).map_err(|_|"preferences-save-failed")?;
  fs::write(&service.preferences_file,serde_json::to_vec_pretty(&*prefs).map_err(|_|"preferences-invalid")?).map_err(|_|"preferences-save-failed")?;}
@@ -116,7 +116,7 @@ fn show_window(app:tauri::AppHandle,label:String)->Result<(),String>{let window=
 
 #[tauri::command]
 fn set_autostart(app:tauri::AppHandle,enabled:bool)->Result<bool,String>{
- let service=app.state::<Service>();if service.startup_error.is_some(){return Err("Reconnect the original configuration before changing startup.".into());}
+ let service=app.try_state::<Service>().ok_or("app-starting")?;if service.startup_error.is_some(){return Err("Reconnect the original configuration before changing startup.".into());}
  // Move the known development core task to GUI-managed login startup. Disabling never stops its current run.
  owned_autostart_task(&app,"Disable")?;
  if enabled{app.autolaunch().enable().map_err(|_|"autostart-update-failed")?;}else if app.autolaunch().is_enabled().map_err(|_|"autostart-status-failed")?{app.autolaunch().disable().map_err(|_|"autostart-update-failed")?;}app.autolaunch().is_enabled().map_err(|_|"autostart-status-failed".into())
@@ -136,7 +136,7 @@ fn get_autostart(app:tauri::AppHandle)->Result<bool,String>{let task=owned_autos
 
 #[tauri::command]
 fn save_diagnostics(app:tauri::AppHandle,value:Value)->Result<String,String>{
- let service=app.state::<Service>();let destination=service.preferences_file.parent().ok_or("diagnostics-directory-missing")?.join("diagnostics-redacted.json");
+ let service=app.try_state::<Service>().ok_or("app-starting")?;let destination=service.preferences_file.parent().ok_or("diagnostics-directory-missing")?.join("diagnostics-redacted.json");
  fs::write(&destination,serde_json::to_vec_pretty(&value).map_err(|_|"diagnostics-invalid")?).map_err(|_|"diagnostics-save-failed")?;
  Ok(destination.to_string_lossy().into_owned())
 }
@@ -155,7 +155,7 @@ fn restore_visible_windows(app:&tauri::AppHandle){
    }
   }
  }
- let state=app.state::<Service>();if let Ok(prefs)=state.preferences.lock(){
+ let Some(state)=app.try_state::<Service>()else{return;};if let Ok(prefs)=state.preferences.lock(){
   if prefs["widgetVisible"]==true{if let Some(window)=app.get_webview_window("widget"){let _=window.show();}}
   for window in app.webview_windows().values(){let _=window.set_theme(Some(if prefs["theme"]=="light"{tauri::Theme::Light}else{tauri::Theme::Dark}));}
  };
@@ -174,11 +174,11 @@ fn tray(app:&tauri::AppHandle)->Result<(),Box<dyn std::error::Error>>{
  .on_menu_event(|app,event|{let id=event.id.as_ref();match id{
   "dashboard"=>show(app,"main",Some("Dashboard")),"threads"=>show(app,"main",Some("Threads")),"widget"=>show(app,"widget",None),"doctor"=>show(app,"main",Some("Diagnostics")),
   "autostart"=>{if let Ok(enabled)=get_autostart(app.clone()){let _=set_autostart(app.clone(),!enabled);}},"exit-ui"=>app.exit(0),
-  "refresh"|"pause"|"resume"|"exit-all"=>{let handle=app.clone();let id=id.to_string();tauri::async_runtime::spawn(async move{let service=handle.state::<Service>();match id.as_str(){"refresh"=>{let _=request(&service,"refresh",json!({})).await;},"pause"=>{let _=request(&service,"settings/update",json!({"autoResume":false})).await;},"resume"=>{let _=request(&service,"settings/update",json!({"autoResume":true})).await;let _=request(&service,"refresh",json!({})).await;},"exit-all"=>{let _=request(&service,"shutdown",json!({})).await;handle.exit(0);},_=>{}}});},_=>{}}}).build(app)?;
+  "refresh"|"pause"|"resume"|"exit-all"=>{let handle=app.clone();let id=id.to_string();tauri::async_runtime::spawn(async move{let Some(service)=handle.try_state::<Service>()else{return;};match id.as_str(){"refresh"=>{let _=request(&service,"refresh",json!({})).await;},"pause"=>{let _=request(&service,"settings/update",json!({"autoResume":false})).await;},"resume"=>{let _=request(&service,"settings/update",json!({"autoResume":true})).await;let _=request(&service,"refresh",json!({})).await;},"exit-all"=>{let _=request(&service,"shutdown",json!({})).await;handle.exit(0);},_=>{}}});},_=>{}}}).build(app)?;
  let handle=app.clone();tauri::async_runtime::spawn(async move{
   let mut previous:Option<Value>=None;
   loop{
-   let result=request(&handle.state::<Service>(),"snapshot",json!({})).await;
+   let Some(service)=handle.try_state::<Service>()else{tokio::time::sleep(Duration::from_millis(50)).await;continue;};let result=request(&service,"snapshot",json!({})).await;
    match result{
     Ok(value)=>{
      let windows=value["quota"]["windows"].as_array();
@@ -186,7 +186,7 @@ fn tray(app:&tauri::AppHandle)->Result<(),Box<dyn std::error::Error>>{
      if let Some(icon)=handle.tray_by_id("main-tray"){let _=icon.set_tooltip(Some(format!("Codex Control Center\n{}",quota_labels.join("\n"))));}
      let tasks=value["tasks"].as_array();let working=tasks.map(|t|t.iter().filter(|t|t["phase"]=="watching"&&t["reason"]=="running").count()).unwrap_or(0);let waiting=tasks.map(|t|t.iter().filter(|t|t["phase"]=="waitingQuota").count()).unwrap_or(0);let _=running.set_text(format!("Running: {working} · Waiting quota: {waiting}"));
      let _=handle.emit("core/snapshot",&value);
-     let notify=handle.state::<Service>().preferences.lock().map(|p|p["notifications"].as_bool().unwrap_or(true)).unwrap_or(false);
+     let notify=service.preferences.lock().map(|p|p["notifications"].as_bool().unwrap_or(true)).unwrap_or(false);
      if notify {if let Some(old)=&previous {
        if old["quota"]["ready"]==false&&value["quota"]["ready"]==true{let _=handle.notification().builder().title("Codex quota recovered").body("All blocking quota windows are available.").show();}
        if old["quota"]["ready"]==true&&value["quota"]["ready"]==false&&value["quota"]["known"]==true{let _=handle.notification().builder().title("Codex quota exhausted").body("Eligible tasks will wait for real quota recovery.").show();}

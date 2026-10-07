@@ -155,9 +155,7 @@ function App() {
     }
   };
   useEffect(() => {
-    void invoke<Prefs>("ui_preferences")
-      .then(setPrefs)
-      .catch((e) => setError(String(e)));
+    void (async()=>{for(let i=0;i<200;i++){try{return await invoke<Prefs>('ui_preferences');}catch(e){if(!String(e).includes('app-starting'))throw e;await new Promise(resolve=>setTimeout(resolve,50));}}throw new Error('app-starting-timeout');})().then(setPrefs).catch(e=>setError(String(e)));
     void request<Snapshot>("snapshot")
       .then(setSnapshot)
       .catch((e) => {const reason=String(e);setError(reason);if(/owner-anchor|configuration|binding|resources-unavailable/.test(reason))setPage('Diagnostics');});
@@ -1150,6 +1148,7 @@ function Diagnostics({
   action: (fn: () => Promise<unknown>) => Promise<void>;
 }) {
   const [report, setReport] = useState<unknown>(null),
+    [natural, setNatural] = useState<unknown>(null),
     [saved, setSaved] = useState<string | null>(null);
   return (
     <>
@@ -1215,6 +1214,7 @@ function Diagnostics({
         </div>
         {saved && <p className="caption">Saved locally: {saved}</p>}
       </section>
+      <section className="panel"><div className="panel-heading"><div><h2>Natural quota cycle evidence</h2><p className="caption">Recovery episodes and final Goal outcome are separate. An active Goal remains pending even when its recovery succeeded.</p></div><button onClick={()=>void action(async()=>setNatural(await request('natural/report')))}>Read real cycle report</button></div>{natural!=null&&<pre>{JSON.stringify(natural,null,2)}</pre>}</section>
     </>
   );
 }
@@ -1244,6 +1244,7 @@ const analyticsQuality = (g: AnalyticsGroup) =>
     .join(", ") ||
   g.tokenTotalStatus ||
   "Observed";
+const baselineGroup=(g:AnalyticsGroup)=>g.ledger.includes('baseline')||String(g.key).startsWith('Unknown (initial thread counter)');
 function TokenAnalytics({ privacy }: { privacy: boolean }) {
   const [groupBy, setGroupBy] = useState("model"),
     [data, setData] = useState<{ groups: AnalyticsGroup[] } | null>(null),
@@ -1319,22 +1320,20 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
                       "total_tokens",
                     ].map((key) => (
                       <td key={key}>
-                        {g.missing?.[key] === g.samples
-                          ? "Unavailable"
-                          : number(g.tokens?.[key])}
+                        {baselineGroup(g)?'Not additive':(g.missing?.[key]??0)>0?'Unavailable':number(g.tokens?.[key])}
                         {g.missing?.[key] > 0 && g.missing[key] < g.samples && (
-                          <small>{g.missing[key]} samples unavailable</small>
+                          <small>Known subtotal {number(g.tokens?.[key])}; {g.missing[key]}/{g.samples} samples unavailable</small>
                         )}
                       </td>
                     ))}
                     <td>
-                      {g.estimatedUsd == null
+                      {baselineGroup(g)||g.estimatedUsd == null
                         ? "Unavailable"
                         : `$${number(g.estimatedUsd, 4)}`}
                     </td>
                     <td>
-                      <b>{g.pricingStatus}</b>
-                      <small>{analyticsQuality(g)}</small>
+                      <b>{baselineGroup(g)?'Non-additive inventory':g.pricingStatus}</b>
+                      <small>{baselineGroup(g)?'Inherited or replayed historical counters; excluded from token consumption and costs':analyticsQuality(g)}</small>
                     </td>
                   </tr>
                 ))}
