@@ -8,15 +8,31 @@
   },
   "scripts": {
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.mjs",
-    "doctor": "node --disable-warning=ExperimentalWarning src/cli.mjs doctor",
-    "status": "node --disable-warning=ExperimentalWarning src/cli.mjs status",
+    "doctor": "node --disable-warning=ExperimentalWarning src/core-cli.mjs doctor",
+    "status": "node --disable-warning=ExperimentalWarning src/core-cli.mjs status",
+    "legacy:doctor": "node --disable-warning=ExperimentalWarning src/cli.mjs doctor",
+    "legacy:status": "node --disable-warning=ExperimentalWarning src/cli.mjs status",
     "core": "node --disable-warning=ExperimentalWarning src/core-cli.mjs",
     "core:doctor": "node --disable-warning=ExperimentalWarning src/core-cli.mjs doctor",
-    "core:sidecar": "node --disable-warning=ExperimentalWarning src/core-cli.mjs sidecar"
+    "core:sidecar": "node --disable-warning=ExperimentalWarning src/core-cli.mjs sidecar",
+    "ui:dev": "vite",
+    "ui:build": "tsc -p ui/tsconfig.json && vite build",
+    "prepare:sidecar": "node scripts/prepare-sidecar.mjs",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.1",
     "react": "19.3.0",
     "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.1",
+    "@types/node": "26.6.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.3"
   }
 }

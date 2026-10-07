@@ -1,0 +1,9 @@
+{
+  "$schema":"https://schema.tauri.app/config/2",
+  "productName":"Codex Control Center",
+  "version":"0.1.0",
+  "identifier":"io.github.xdcgh.codex-control-center",
+  "build":{"beforeDevCommand":"npm run ui:dev","devUrl":"http://127.0.0.1:1420","beforeBuildCommand":"npm run ui:build && npm run prepare:sidecar","frontendDist":"../dist"},
+  "app":{"windows":[{"label":"main","title":"Codex Control Center","width":1240,"height":840,"minWidth":850,"minHeight":600,"backgroundColor":"#10131c"},{"label":"widget","title":"Codex Status","url":"index.html?view=widget","width":310,"height":275,"minWidth":270,"minHeight":235,"decorations":false,"transparent":true,"alwaysOnTop":true,"visible":false,"skipTaskbar":true},{"label":"compact","title":"Codex Status","url":"index.html?view=compact","width":360,"height":360,"decorations":false,"alwaysOnTop":true,"visible":false,"skipTaskbar":true}],"security":{"csp":"default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; script-src 'self'"}},
+  "bundle":{"active":true,"targets":["nsis"],"icon":["icons/icon.ico","icons/32x32.png","icons/128x128.png"],"resources":{"../.packaged/core/":"core/","../.packaged/node.exe":"node.exe","../.packaged/node-LICENSE":"node-LICENSE"},"windows":{"nsis":{"displayLanguageSelector":false,"installMode":"currentUser"}}}
+}
