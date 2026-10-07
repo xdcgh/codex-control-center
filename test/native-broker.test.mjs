@@ -19,3 +19,7 @@ test('production native helper authenticates and correlates mock-owner requests 
   const invalid=net.createConnection(descriptor.pipe);const closed=new Promise(resolve=>invalid.once('close',resolve));invalid.on('error',()=>{});invalid.write(JSON.stringify({id:3,method:'snapshot'})+'\n');await closed;assert.equal(calls,1);
  }finally{await broker?.close();fs.rmSync(directory,{recursive:true,force:true});}
 });
+test('production native singleton rejects a second owner even when state directories differ',{skip:process.platform!=='win32'||!nativeBin},async()=>{
+ const firstDirectory=fs.mkdtempSync(path.join(os.tmpdir(),'ccc-singleton-first-')),secondDirectory=fs.mkdtempSync(path.join(os.tmpdir(),'ccc-singleton-second-'));let broker;
+ try{const singletonScope=`isolated-test:${firstDirectory}`;broker=await startBroker({stateDirectory:firstDirectory,nativeBin,production:true,singletonScope,route:async()=>({})});await assert.rejects(startBroker({stateDirectory:secondDirectory,nativeBin,production:true,singletonScope,route:async()=>({})}),/native-broker-helper-failed/);}finally{await broker?.close();fs.rmSync(firstDirectory,{recursive:true,force:true});fs.rmSync(secondDirectory,{recursive:true,force:true});}
+});

@@ -14,15 +14,16 @@ function protectDirectory(directory) {
       const sid=execFileSync(powershell,['-NoProfile','-NonInteractive','-Command','[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value'],{windowsHide:true,encoding:'utf8',timeout:8000}).trim();
       if(!/^S-1-5-\d+(?:-\d+)+$/.test(sid))throw new Error('invalid-user-sid');
       execFileSync(path.join(process.env.SystemRoot,'System32/icacls.exe'),[directory,'/inheritance:r','/grant:r',`*${sid}:(OI)(CI)F`,'*S-1-5-18:(OI)(CI)F','/deny','*S-1-5-2:(OI)(CI)F'],{windowsHide:true,stdio:'ignore',timeout:8000});
+      return sid;
     } catch { throw new Error('broker-user-acl-unavailable'); }
   } else fs.chmodSync(directory,0o700);
 }
 
-export async function startBroker({stateDirectory,route,timeoutMs=10000,nativeBin,onFatal=()=>{}}) {
-  const directory=path.join(stateDirectory,'broker');protectDirectory(directory);
+export async function startBroker({stateDirectory,route,timeoutMs=10000,nativeBin,onFatal=()=>{},production=false,singletonScope='global-owner-v1'}) {
+  const directory=path.join(stateDirectory,'broker'),identity=protectDirectory(directory);
   const descriptorPath=path.join(directory,'owner.json');
   const token=randomBytes(32).toString('hex');
-  const hash=createHash('sha256').update(path.resolve(stateDirectory).toLowerCase()).digest('hex').slice(0,24);
+  const hash=createHash('sha256').update(production&&identity?`production-owner:${identity}:${singletonScope}`:path.resolve(stateDirectory).toLowerCase()).digest('hex').slice(0,24);
   const pipe=process.platform==='win32'?`\\\\.\\pipe\\codex-control-center-${hash}`:path.join(directory,'owner.sock');
   if(nativeBin)return startNativeBroker({nativeBin,pipe,token,descriptorPath,route,onFatal});
   const expected=Buffer.from(token,'hex');const clients=new Set();let closed=false;

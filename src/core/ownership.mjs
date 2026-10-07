@@ -23,7 +23,17 @@ export function resolveOwnerAnchor({profile=os.homedir(),create=false}={}) {
   }
   return anchor;
 }
+export function inspectOwnerLease({directory=resolveOwnerAnchor(),owner}={}){
+ const file=path.join(directory,'daemon.lock');if(!owner){if(!fs.existsSync(file))return{present:false,alive:false,stale:false};try{owner=JSON.parse(fs.readFileSync(file,'utf8'));}catch{throw new Error('owner-lock-invalid');}}
+ if(!Number.isSafeInteger(owner.pid)||owner.pid<=0||typeof owner.startedAt!=='string'||!Number.isFinite(Date.parse(owner.startedAt)))throw new Error('owner-lock-invalid');
+ if(process.platform==='win32'){
+  const powershell=path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe'),script=path.resolve(import.meta.dirname,'../../scripts/Inspect-OwnerLease.ps1');
+  let result;try{result=JSON.parse(execFileSync(powershell,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-PidValue',String(owner.pid),'-ClaimedStartedAt',owner.startedAt],{windowsHide:true,encoding:'utf8',stdio:['ignore','pipe','ignore'],timeout:8000}));}catch{throw new Error('owner-liveness-proof-unavailable');}
+  if(typeof result.alive!=='boolean')throw new Error('owner-liveness-proof-invalid');return{present:true,alive:result.alive,stale:!result.alive};
+ }
+ let alive=true;try{process.kill(owner.pid,0);}catch(error){if(error.code==='ESRCH')alive=false;}return{present:true,alive,stale:!alive};
+}
 const canonicalModule=value=>fs.realpathSync(value).replace(/^\\\\\?\\UNC\\/i,'\\\\').replace(/^\\\\\?\\/,'').toLowerCase();
-if(process.argv[1]&&canonicalModule(process.argv[1])===canonicalModule(fileURLToPath(import.meta.url))&&process.argv.includes('--print-anchor')){
-  try{process.stdout.write(JSON.stringify({anchor:resolveOwnerAnchor({create:true})})+'\n');}catch(error){process.stdout.write(JSON.stringify({error:error.message})+'\n');process.exitCode=1;}
+if(process.argv[1]&&canonicalModule(process.argv[1])===canonicalModule(fileURLToPath(import.meta.url))&&(process.argv.includes('--print-anchor')||process.argv.includes('--print-owner-state'))){
+  try{process.stdout.write(JSON.stringify(process.argv.includes('--print-owner-state')?inspectOwnerLease():{anchor:resolveOwnerAnchor({create:true})})+'\n');}catch(error){process.stdout.write(JSON.stringify({error:error.message})+'\n');process.exitCode=1;}
 }

@@ -27,7 +27,7 @@ export class StateStore {
   save(value) { value.updatedAt = new Date().toISOString(); atomicWrite(this.file, value); }
 }
 
-export function acquireLock(directory) {
+export function acquireLock(directory,{isOwnerAlive}={}) {
   fs.mkdirSync(directory, { recursive: true });
   const file = path.join(directory, 'daemon.lock');
   const token = randomUUID();
@@ -42,7 +42,8 @@ export function acquireLock(directory) {
     const owner = readJson(file);
     if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0) throw new Error('watchdog-lock-invalid');
     let alive = true;
-    try { process.kill(owner.pid, 0); } catch (checkError) { if (checkError.code === 'ESRCH') alive = false; }
+    if(isOwnerAlive)alive=isOwnerAlive(owner);
+    else try { process.kill(owner.pid, 0); } catch (checkError) { if (checkError.code === 'ESRCH') alive = false; }
     if (alive) throw new Error('watchdog-already-running');
     // Remove only this exact stale lock; never remove the state directory or ledger.
     fs.unlinkSync(file); claim();

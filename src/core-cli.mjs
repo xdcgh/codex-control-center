@@ -9,7 +9,7 @@ import { migrateLegacy } from './core/migration.mjs';
 import { startBroker } from './core/broker.mjs';
 import { createRouter } from './core/router.mjs';
 import { ObservabilityClient } from './core/observability-client.mjs';
-import { resolveOwnerAnchor } from './core/ownership.mjs';
+import { resolveOwnerAnchor,inspectOwnerLease } from './core/ownership.mjs';
 import { brokerRequest } from './core/broker-client.mjs';
 import { NaturalCycleRecorder } from './observability/natural-cycle.mjs';
 import { backfillAutomaticRecoveryEvents } from './core/natural-backfill.mjs';
@@ -35,8 +35,8 @@ try {
   adapter = new CodexAdapter(config);
   if (command === 'doctor') output(await adapter.doctor({ threadId: argument('--thread') }));
   else if (['run','sidecar','status','history','migrate'].includes(command)) {
-    if(['run','sidecar'].includes(command))ownerRelease=acquireLock(resolveOwnerAnchor({create:true}));
-    release = acquireLock(config.stateDirectory);
+    if(['run','sidecar'].includes(command)){const anchor=resolveOwnerAnchor({create:true});ownerRelease=acquireLock(anchor,{isOwnerAlive:owner=>inspectOwnerLease({directory:anchor,owner}).alive});}
+    release = acquireLock(config.stateDirectory,{isOwnerAlive:owner=>inspectOwnerLease({directory:config.stateDirectory,owner}).alive});
     store = new SqliteStore(path.join(config.stateDirectory,'control-center.sqlite'));
     if(command==='migrate')output(migrateLegacy(store,config.legacyStateDirectory,{dryRun:!args.includes('--apply')}));
     else {
@@ -53,7 +53,7 @@ try {
       const route=createRouter({core,store,adapter,observability,recorder,shutdown:finish});
       const nativeBin=process.env.CODEX_CONTROL_CENTER_BROKER_HELPER??config.nativeBrokerBin;
       if(args.includes('--execute')&&!nativeBin)throw new Error('native-broker-helper-required-for-execution');
-      broker=await startBroker({stateDirectory:config.stateDirectory,route,nativeBin,onFatal:finish});
+      broker=await startBroker({stateDirectory:config.stateDirectory,route,nativeBin,onFatal:finish,production:true});
       // Quota checks continue independently while slow desktop thread reads are pending.
       quotaTimer=setInterval(()=>{ void core.pollQuota().catch(error=>output({method:'quota/error',params:{reason:error.message}})); },250);
       if (command === 'sidecar') {
