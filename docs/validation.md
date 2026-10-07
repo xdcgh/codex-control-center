@@ -34,17 +34,21 @@ Source and license review is recorded in [research.md](research.md). Token/accou
 
 ### Observability adapter targeted acceptance
 
-Targeted black-box acceptance: **PASS 6/6** via `node --test test/acceptance-observability.test.mjs`, using synthetic JSONL events and a temporary SQLite database. No actual Codex session data was read. This result does not represent a full `npm test` rerun after the observability files were added.
+Targeted black-box acceptance: **PASS 8/8** (`test/acceptance-observability.test.mjs`) and implementation tests **PASS 17/17** (`test/observability.test.mjs`); combined **25/25**, 0 failed, 0 skipped. Tests use synthetic JSONL and temporary SQLite only. No actual Codex session data was read.
 
-Source identity: Observability implementation commit `276e4bf`; the fingerprints below bind this test record to the tested modules and policy snapshot. SHA-256 fingerprints:
+Counter semantics were rechecked after the legacy baseline failure: initial, reset, and out-of-order cumulative snapshots go to a non-additive inventory with token totals and price unavailable. In the restart/archive fixture, only ordered within-epoch changes count as deltas: 500 input tokens before reset plus 40 after reset (540 total); a late pre-reset snapshot does not rewind the new baseline. A legacy row still carrying `scope=cumulative-delta` but marked `initialCounter=true` remains byte-for-byte unchanged in storage and is summarized as unpriced inventory. Actual response-ID records are kept in their own ledger, deduplicated for the same known provider/response ID across a fork, and never combined with counter deltas or inventory.
+
+Scope limit: these checks validate per-observed-file counter provenance and ledger separation. They do **not** prove globally complete account consumption or resolve root/fork/inherited-history overlap; `globalConsumptionStatus` remains Unavailable. Do not add response, counter-delta, inventory, or latest-snapshot ledgers together.
+
+Source identity: base commit `3b0c6ed` plus the uncommitted observability implementation/test working tree at verification time. The following fingerprints bind this result to the tested source snapshot:
 
 | File | SHA-256 |
 | --- | --- |
-| `src/observability/index.mjs` | `C0304F07C6994E3D8B3AB40C3E663E5BA971D56B48B3074C13A1D95F59C1A0E7` |
-| `src/observability/session-log-adapter.mjs` | `40C68B6852ED9168C607C9AAE639DC36BEAA996DC6A49DAC011D77AD19FDC8A7` |
-| `src/observability/pricing.mjs` | `06A54804CAC57AEE3B901AC2DF6507E1D4DE94481A5E282E2971B0662FB0A625` |
+| `src/observability/index.mjs` | `3BF2A3CAF0A3BB7D7C58E4312CF0740D5ED30D0DF83BEEDA9447CB4286624411` |
+| `src/observability/session-log-adapter.mjs` | `04B7681C76E74EC8AC65548E2B39C36CCB8158F11DC80F09A07C3BD63D5BB977` |
+| `src/observability/pricing.mjs` | `C1F0CAB88C8D7362DB4AF01A71B9C81FAA922258716491B83E91D688900C0602` |
 | `pricing.json` | `5E71029349A2EAA4D69E22E5A1B57B5712ABA556DE29743D631DC3C588E38161` |
-| `test/acceptance-observability.test.mjs` | `A8D972F1FCFC2DD25E8E7F8A20401D38E3168EA7854994A71205228EF51CC737` |
+| `test/acceptance-observability.test.mjs` | `864CE486515567B3A3601B750C183A1473A11DE509D160ED627CEC5A8B9FFB63` |
 
 ### Local broker targeted acceptance
 
@@ -102,7 +106,7 @@ This is a tool-presence record, not a build result. The task-specific Rust toolc
 | --- | --- | --- |
 | Phase 2 — Core v2 | Deterministic parser/state/scheduler tests; app-server integration with explicit authorization; durable-state restart tests; no duplicate dispatch | **Fixture suite PASS (52/52 at `0288b89`); phase remains pending** for runtime integration and owner handover |
 | Phase 3 — Desktop MVP | Packaged Tauri shell; tray/window/widget behavior and UI smoke | Pending |
-| Phase 4 — Observability | Quota history, token attribution and price-policy tests with exact/estimated/unavailable distinctions | Pending |
+| Phase 4 — Observability | Quota history, token attribution and price-policy tests with exact/estimated/unavailable distinctions | Targeted tests **25/25 PASS**; remains pending complete root/fork/account scope and runtime observation |
 | Phase 5 — Performance | Instrumented client timings with labels that distinguish visible end-to-end timing from unavailable model timing | Pending |
 | Phase 6 — Scheduler | Queue, concurrency, retry and reserve policy tests | Pending |
 | Phase 7 — Widget | Tray/widget and privacy-mode checks | Pending |
@@ -111,3 +115,11 @@ This is a tool-presence record, not a build result. The task-specific Rust toolc
 | Phase 10 — Open-source release | Security gate, secret review, package hashes, installer and release verification | Pending |
 
 Never promote mocked fixtures, synthetic quota responses, or unit tests into natural-cycle evidence. Keep live smoke-test evidence separate from unit and integration results.
+
+### Desktop real-turn smoke — 2026-10-07
+
+**REAL_DESKTOP_SMOKE: PASS for one normal turn and one Goal turn; two model calls total.** Both used the live model catalog's `gpt-6-luna` at `low`, sent once over Desktop IPC to newly created owned fixtures, and completed with their distinct fixed markers and matching client message IDs. Goal identity, budget, and usage counters were preserved during restoration and the Goal completed. Its trigger was deliberately set to `usageLimited` in the fixture before restoration: classify this as **SIMULATED_TRIGGER**, never as a natural quota-cycle pass.
+
+Both fixture rows were observed as `thread_source=agent`; each was absent from the Core candidate list and eligibility check, and neither appeared in Core thread records, policies, intents, or events (**2/2 isolated**). Detailed receipts remain in private temporary diagnostics; no IDs, prompts, account values, or user-thread content are included here. Existing Codex backend/Core processes remained running, and no existing user thread or Goal was changed.
+
+**Cleanup compatibility issue:** the two completed test fixtures remain unarchived. `thread/archive` returned JSON-RPC `-32600`, and the Desktop archive broadcast did not mark the catalog rows archived. This is a known issue for future Desktop/AppServer compatibility work. Do not stop/restart the owner or edit the Codex database to force cleanup. This smoke is not evidence of natural quota recovery or a complete product acceptance.

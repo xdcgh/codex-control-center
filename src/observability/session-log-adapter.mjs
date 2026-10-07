@@ -56,7 +56,7 @@ export class SessionLogAdapter {
   }
   consume(event,meta,result) {
     const p=event.payload ?? {}, timestamp=Date.parse(event.timestamp);
-    if (event.type==='session_meta') { meta.threadId=scalar(p.id); meta.workspace=scalar(p.cwd); meta.provider=scalar(p.model_provider); return; }
+    if (event.type==='session_meta') { meta.threadId=scalar(p.id); meta.workspace=scalar(p.cwd); meta.provider=scalar(p.model_provider);meta.parentThreadId=scalar(p.parent_thread_id);meta.forkedHistory=!!(p.forked_from_id??p.forked_from); return; }
     if (event.type==='turn_context') {
       meta.turnId=scalar(p.turn_id); meta.model=scalar(p.model); meta.effort=scalar(p.effort ?? p.reasoning_effort); meta.serviceTier=scalar(p.service_tier); meta.provider=scalar(p.model_provider) ?? meta.provider; meta.workspace=scalar(p.cwd) ?? meta.workspace; meta.goalId=scalar(p.goal_id);
       if(meta.threadId && meta.turnId) this.store.db.prepare('INSERT OR REPLACE INTO turns VALUES(?,?,?)').run(meta.turnId,meta.threadId,JSON.stringify({...meta,timestamp:Number.isFinite(timestamp)?timestamp:null})); return;
@@ -67,26 +67,29 @@ export class SessionLogAdapter {
     const history=this.store.getSetting('observability:turn-metadata:'+digest([meta.threadId,turnId]),[]);
     const observed=history.filter(m=>m.observedAt<=timestamp).at(-1)?.metadata;
     const provider=scalar(p.model_provider)??meta.provider??observed?.provider??null,loggedTier=scalar(p.service_tier)??meta.serviceTier??null,rawServiceTier=loggedTier??observed?.rawServiceTier??null;
-    const base={threadId:meta.threadId,turnId,model:scalar(p.model)??meta.model??observed?.model??null,provider,rawServiceTier,serviceTier:normalizeServiceTier(rawServiceTier,provider),tierEvidence:loggedTier?'session-log-field':rawServiceTier?'observed-turn-settings':null,effort:meta.effort??observed?.effort??null,workspace:meta.workspace??null,goalId:meta.goalId??null,timestamp,source:'local-session-log'};
+    const base={threadId:meta.threadId,turnId,rootTurnId:scalar(p.root_turn_id),parentThreadId:meta.parentThreadId??null,forkedHistory:!!meta.forkedHistory,model:scalar(p.model)??meta.model??observed?.model??null,provider,rawServiceTier,serviceTier:normalizeServiceTier(rawServiceTier,provider),tierEvidence:loggedTier?'session-log-field':rawServiceTier?'observed-turn-settings':null,effort:meta.effort??observed?.effort??null,workspace:meta.workspace??null,goalId:meta.goalId??null,timestamp,source:'local-session-log'};
     if (type==='token_count' || type==='token_usage' || type==='token_usage_record') {
       const info=p.info ?? p, responseId=scalar(p.response_id ?? info.response_id), id=digest({thread:meta.threadId,responseId,event:responseId?null:event});
       if(this.store.db.prepare('SELECT 1 FROM token_usage WHERE id=?').get(id)) return;
-      let usage, scope, latest=null, discontinuity=false, initialCounter=false;
+      let usage, scope, latest=null, discontinuity=false, initialCounter=false,outOfOrder=false;
       if (p.usage && responseId) { usage=tokens(p.usage); scope='response'; }
       else if (info.total_token_usage) {
         const current=tokens(info.total_token_usage), counterKey='observability:counter:'+digest(meta.threadId), old=this.store.getSetting(counterKey);
-        initialCounter=!old;
+        const orderKey='observability:counter-order:'+digest(meta.threadId),order=this.store.getSetting(orderKey);
+        initialCounter=!old||!order;
+        outOfOrder=!!order&&timestamp<order.timestamp;
         // A cumulative reset is a new epoch, never negative usage.
         discontinuity=!!old && tokenFields.some(k=>current[k]!=null && old[k]!=null && current[k]<old[k]);
-        usage=Object.fromEntries(tokenFields.map(k=>[k,current[k]==null?null:old?.[k]==null||discontinuity?current[k]:current[k]-old[k]]));
-        this.store.setSetting(counterKey,current); scope='cumulative-delta'; latest=info.last_token_usage?tokens(info.last_token_usage):null;
+        usage=Object.fromEntries(tokenFields.map(k=>[k,current[k]==null?null:initialCounter||discontinuity||outOfOrder?current[k]:old?.[k]==null?null:current[k]-old[k]]));
+        if(!outOfOrder) { this.store.setSetting(counterKey,current);this.store.setSetting(orderKey,{timestamp}); }
+        scope=initialCounter||discontinuity||outOfOrder?'counter-snapshot':'cumulative-delta';latest=info.last_token_usage?tokens(info.last_token_usage):null;
       } else if (info.last_token_usage) { usage=tokens(info.last_token_usage); scope='latest-sample'; }
       else return;
       if(discontinuity) result.discontinuities++;
       // Repeated cumulative snapshots are retained for provenance but cannot become
       // another billable/latest-request sample when no token counter advanced.
       const advanced=usage.input_tokens>0 || usage.output_tokens>0;
-      const record={...base,usage,scope,responseId,latestUsage:advanced?latest:null,discontinuity,initialCounter,attribution:initialCounter?'initial-thread-counter; prior-turn-and-model-coverage-unproven':'observed-event-metadata',consistency:usage.total_tokens!=null && usage.input_tokens!=null && usage.output_tokens!=null && usage.total_tokens!==usage.input_tokens+usage.output_tokens?'total-mismatch':null};
+      const record={...base,usage,scope,responseId,latestUsage:advanced?latest:null,discontinuity,initialCounter,outOfOrder,additiveWithinCounterEpoch:scope==='cumulative-delta',attribution:scope==='counter-snapshot'?'non-additive counter inventory; inherited or replayed history possible':'observed-event-metadata; root/child rollup not proven',consistency:usage.total_tokens!=null && usage.input_tokens!=null && usage.output_tokens!=null && usage.total_tokens!==usage.input_tokens+usage.output_tokens?'total-mismatch':null};
       result.usage+=insert(this.store,'token_usage',id,record,meta.threadId,base.turnId);
       if(responseId) insert(this.store,'model_calls',id,record);
       return;

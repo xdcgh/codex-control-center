@@ -23,7 +23,7 @@ test('incremental tails, restart, archive duplicate, reset, privacy',t=>{
   const restart=new ObservabilityService({store,codexHome:home});assert.equal(restart.poll().usage,0);
   fs.mkdirSync(path.join(home,'archived_sessions'));fs.copyFileSync(file,path.join(home,'archived_sessions','copy.jsonl'));assert.equal(restart.poll().usage,0);
   fs.appendFileSync(file,event('event_msg',{type:'token_count',info:{total_token_usage:usage(200,40),last_token_usage:usage()}}));assert.equal(restart.poll().usage,1);
-  const groups=restart.summary({groupBy:'thread'}).groups;assert.equal(groups[0].tokens.input_tokens,200);assert.equal(groups[0].tokens.output_tokens,40);assert.equal(groups[0].tokens.reasoning_output_tokens,5);
+  const groups=restart.summary({groupBy:'thread'}).groups,delta=groups.find(g=>g.ledger==='cumulative-delta'),baseline=groups.find(g=>g.ledger==='baseline-counter-inventory');assert.equal(delta.tokens.input_tokens,100);assert.equal(delta.tokens.output_tokens,20);assert.equal(delta.tokens.reasoning_output_tokens,0);assert.equal(baseline.tokens.input_tokens,null);assert.equal(baseline.additiveWithinLedger,false);
   fs.appendFileSync(file,event('event_msg',{type:'token_count',info:{total_token_usage:usage(50,10),last_token_usage:usage(50,10)}}));assert.equal(restart.poll().discontinuities,1);
   fs.appendFileSync(file,event('response_item',{type:'message',content:'PROMPT-SECRET'})+event('response_item',{type:'function_call',arguments:'AUTH-SECRET'}));restart.poll();
   assert.ok(!JSON.stringify(restart.exportDiagnostics()).includes('private'));
@@ -103,4 +103,25 @@ test('observed turn metadata enriches only matching future events and retains ra
   fs.appendFileSync(file,event('token_usage_record',{turn_id:'turn-1',response_id:'before',usage:usage()})+JSON.stringify({timestamp:'2026-10-07T12:00:02Z',type:'token_usage_record',payload:{turn_id:'turn-1',response_id:'after',usage:usage()}})+'\n');service.poll();
   const rows=service.rows('token_usage');assert.equal(rows[0].serviceTier,null);assert.equal(rows[1].rawServiceTier,'default');assert.equal(rows[1].serviceTier,'standard');assert.equal(service.pricing.estimate(rows[1]).status,'Partial');assert.equal(service.pricing.estimate(rows[1]).reason,'configured-turn-tier-not-response-confirmed');
   assert.throws(()=>service.observeTurnMetadata({threadId:'thread-1',turnId:'turn-1',source:'guess'}),/invalid/);
+});
+test('initial, inherited and reset counters are inventory rather than consumption',t=>{
+  const {service,file}=fixture(t);
+  fs.appendFileSync(file,event('event_msg',{type:'token_count',info:{total_token_usage:usage(1000000,1000)}})+JSON.stringify({timestamp:'2026-10-07T12:00:01Z',type:'event_msg',payload:{type:'token_count',info:{total_token_usage:usage(1000010,1002)}}})+'\n'+JSON.stringify({timestamp:'2026-10-07T12:00:02Z',type:'event_msg',payload:{type:'token_count',info:{total_token_usage:usage(50,10)}}})+'\n');
+  const fork=path.join(path.dirname(file),'fork.jsonl');fs.writeFileSync(fork,event('session_meta',{id:'fork-thread',parent_thread_id:'thread-1',forked_from_id:'thread-1',model_provider:'openai'})+event('turn_context',{turn_id:'fork-turn',model:'gpt-6.1-sol'})+event('event_msg',{type:'token_count',info:{total_token_usage:usage(1000000,1000)}}));service.poll();
+  const groups=service.summary().groups,inventory=groups.find(g=>g.ledger==='baseline-counter-inventory'),delta=groups.find(g=>g.ledger==='cumulative-delta');assert.equal(inventory.samples,3);assert.equal(inventory.tokens.input_tokens,null);assert.equal(inventory.counterInventoryStats.input_tokens.max,1000000);assert.equal(inventory.estimatedUsd,null);assert.equal(inventory.additiveWithinLedger,false);assert.equal(delta.tokens.input_tokens,10);assert.equal(delta.tokens.output_tokens,2);assert.equal(delta.canCombineWithOtherLedgers,false);
+});
+test('out-of-order archive observations do not roll back the durable counter baseline',t=>{
+  const {service,file}=fixture(t);const row=(timestamp,u)=>JSON.stringify({timestamp,type:'event_msg',payload:{type:'token_count',info:{total_token_usage:u}}})+'\n';
+  fs.appendFileSync(file,row('2026-10-07T12:00:01Z',usage(100,20))+row('2026-10-07T12:00:03Z',usage(200,40))+row('2026-10-07T12:00:02Z',usage(150,30))+row('2026-10-07T12:00:04Z',usage(210,42)));service.poll();
+  const delta=service.summary().groups.find(g=>g.ledger==='cumulative-delta');assert.equal(delta.tokens.input_tokens,110);assert.equal(delta.tokens.output_tokens,22);assert.equal(service.rows('token_usage').filter(r=>r.outOfOrder).length,1);
+});
+test('legacy baseline flags classify correctly without clearing or rewriting stored records',t=>{
+  const {service,store}=fixture(t);const baseline={threadId:'thread-1',turnId:'turn-1',model:'gpt-6.1-sol',provider:'openai',timestamp:Date.parse(time),scope:'cumulative-delta',initialCounter:true,usage:usage(77738040827,218796327)};store.db.prepare('INSERT INTO token_usage VALUES(?,?,?,?)').run('legacy-baseline','thread-1','turn-1',JSON.stringify(baseline));
+  const g=service.summary().groups[0];assert.equal(g.ledger,'baseline-counter-inventory');assert.equal(g.tokens.total_tokens,null);assert.equal(g.pricingStatus,'Unavailable');assert.equal(service.rows('token_usage')[0].scope,'cumulative-delta');
+});
+test('response IDs shared by root and fork scopes are counted once within a known provider',t=>{
+  const {service,store}=fixture(t);for(const [id,threadId] of [['a','thread-a'],['b','thread-b']]){const r={threadId,turnId:'turn-id',responseId:'shared-response',provider:'openai',model:'gpt-6.1-sol',scope:'response',timestamp:Date.parse(time),usage:usage()};store.db.prepare('INSERT INTO token_usage VALUES(?,?,?,?)').run(id,threadId,'turn-id',JSON.stringify(r));}const s=service.summary();assert.equal(s.duplicateResponseRecords,1);assert.equal(s.groups[0].tokens.input_tokens,100);assert.equal(s.groups[0].samples,1);
+});
+test('a newly exposed cache field cannot be treated as an additive delta from an unknown baseline',t=>{
+  const {service,file}=fixture(t);const missing={...usage(100,20),cache_write_input_tokens:undefined};fs.appendFileSync(file,event('event_msg',{type:'token_count',info:{total_token_usage:missing}})+JSON.stringify({timestamp:'2026-10-07T12:00:01Z',type:'event_msg',payload:{type:'token_count',info:{total_token_usage:{...usage(110,22),cache_write_input_tokens:5}}}})+'\n');service.poll();const d=service.summary().groups.find(g=>g.ledger==='cumulative-delta');assert.equal(d.tokens.input_tokens,10);assert.equal(d.tokens.cache_write_input_tokens,null);assert.equal(d.missing.cache_write_input_tokens,1);
 });

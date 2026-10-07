@@ -32,17 +32,24 @@ export class ObservabilityService {
     if(!keys[groupBy] && !windows[groupBy]) throw new Error('unsupported-group-by');
     const groups=new Map();
     const all=this.rows('token_usage').filter(e=>e.timestamp>=since);
+    const responseIdentities=new Set();let duplicateResponseRecords=0;
     // Expose separate sources; never silently add both ledgers.
     for(const e of all) {
-      const unproven=e.initialCounter && groupBy!=='thread';
-      const key=unproven?'Unknown (initial thread counter)':windows[groupBy]?String(Math.floor(e.timestamp/windows[groupBy])*windows[groupBy]):groupBy==='tier'?normalizeServiceTier(e.rawServiceTier??e.serviceTier,e.provider)??'Unknown':e[keys[groupBy]]??'Unknown';
-      const ledger=e.scope==='response'?'response':e.scope==='latest-sample'?'latest-sample':'cumulative-delta';
+      if(e.scope==='response'&&e.provider&&e.responseId) {
+        const identity=JSON.stringify([e.provider,e.responseId]);
+        if(responseIdentities.has(identity)) { duplicateResponseRecords++;continue; }
+        responseIdentities.add(identity);
+      }
+      const inventory=e.initialCounter||e.discontinuity||e.outOfOrder||e.scope==='counter-snapshot';
+      const unproven=inventory&&groupBy!=='thread';
+      const key=unproven?'Counter inventory (unknown attribution)':windows[groupBy]?String(Math.floor(e.timestamp/windows[groupBy])*windows[groupBy]):groupBy==='tier'?normalizeServiceTier(e.rawServiceTier??e.serviceTier,e.provider)??'Unknown':e[keys[groupBy]]??'Unknown';
+      const ledger=inventory?'baseline-counter-inventory':e.scope==='response'?'response':e.scope==='latest-sample'?'latest-sample':'cumulative-delta';
       const mapKey=JSON.stringify([key,ledger]);
-      if(!groups.has(mapKey)) groups.set(mapKey,{key,ledger,samples:0,tokens:Object.fromEntries(tokenFields.map(k=>[k,0])),missing:Object.fromEntries(tokenFields.map(k=>[k,0])),estimatedUsd:0,pricedSamples:0,partialPriceSamples:0,pricingReasons:{},actualRequestInputs:[],latestSampleInputs:[],longContextSamples:0,unknownContextSamples:0,discontinuities:0});
+      if(!groups.has(mapKey)) groups.set(mapKey,{key,ledger,samples:0,tokens:Object.fromEntries(tokenFields.map(k=>[k,0])),missing:Object.fromEntries(tokenFields.map(k=>[k,0])),inventoryValues:Object.fromEntries(tokenFields.map(k=>[k,[]])),estimatedUsd:0,pricedSamples:0,partialPriceSamples:0,pricingReasons:{},actualRequestInputs:[],latestSampleInputs:[],longContextSamples:0,unknownContextSamples:0,discontinuities:0});
       const g=groups.get(mapKey);g.samples++;g.discontinuities+=Number(e.discontinuity);
-      for(const k of tokenFields) e.usage[k]==null?g.missing[k]++:g.tokens[k]+=e.usage[k];
+      for(const k of tokenFields) { if(e.usage[k]==null)g.missing[k]++;else if(inventory)g.inventoryValues[k].push(e.usage[k]);else g.tokens[k]+=e.usage[k]; }
       const request=e.latestUsage?{...e,usage:e.latestUsage,scope:'latest-sample'}:e;
-      const price=this.pricing.estimate(request);
+      const price=inventory?{status:'Unavailable',usd:null,reason:'counter-inventory-is-not-additive-consumption'}:this.pricing.estimate(request);
       if(price.status==='Partial') g.partialPriceSamples++;
       if(price.usd!=null) { g.estimatedUsd+=price.usd;g.pricedSamples++; }
       if(price.reason) g.pricingReasons[price.reason]=(g.pricingReasons[price.reason]??0)+1;
@@ -50,10 +57,12 @@ export class ObservabilityService {
       if(request.scope==='latest-sample' && request.usage.input_tokens!=null) g.latestSampleInputs.push(request.usage.input_tokens);
       if(price.context==='long') g.longContextSamples++; else if(price.context==null) g.unknownContextSamples++;
     }
-    return {groupBy,since,source:'local-session-log',coverage:'best-effort; response and cumulative ledgers are separate and must not be added together',groups:[...groups.values()].map(g=>{
+    return {groupBy,since,source:'local-session-log',duplicateResponseRecords,coverage:'Observed ledgers only; initial/reset/reordered counters are non-additive inventory. Known-provider response IDs are deduped across threads. Response, counter-delta and latest-sample ledgers overlap and must not be added together; global/root-child consumption is unverified.',groups:[...groups.values()].map(g=>{
       const inputs=g.actualRequestInputs;
       const snapshotsOnly=g.ledger==='latest-sample';
-      return {...g,tokens:Object.fromEntries(tokenFields.map(k=>[k,snapshotsOnly||g.missing[k]===g.samples?null:g.tokens[k]])),actualRequestInputs:undefined,latestSampleInputs:undefined,countLabel:g.ledger==='response'?'Response records':'Usage samples',contextCountLabel:'Observed context samples; not a unique request count',tokenTotalStatus:snapshotsOnly?'Unavailable: latest snapshots cannot establish an additive ledger':'Best-effort',inputP50:percentile(inputs,.5),inputP95:percentile(inputs,.95),inputSamples:inputs.length,latestSampleInputP50:percentile(g.latestSampleInputs,.5),latestSampleInputP95:percentile(g.latestSampleInputs,.95),latestInputObservations:g.latestSampleInputs.length,cacheHitRatio:snapshotsOnly||g.missing.cached_input_tokens||g.missing.input_tokens?null:g.tokens.input_tokens?g.tokens.cached_input_tokens/g.tokens.input_tokens:0,pricingStatus:snapshotsOnly?'Unavailable':g.pricedSamples===g.samples&&!g.partialPriceSamples?'Estimated':g.pricedSamples||g.partialPriceSamples?'Partial':'Unavailable',estimatedUsd:snapshotsOnly?null:g.pricedSamples?g.estimatedUsd:null};
+      const inventory=g.ledger==='baseline-counter-inventory';
+      const counterInventoryStats=inventory?Object.fromEntries(tokenFields.map(k=>[k,{samples:g.inventoryValues[k].length,max:g.inventoryValues[k].length?Math.max(...g.inventoryValues[k]):null,p50:percentile(g.inventoryValues[k],.5),p95:percentile(g.inventoryValues[k],.95)}])):null;
+      return {...g,tokens:Object.fromEntries(tokenFields.map(k=>[k,snapshotsOnly||inventory||g.missing[k]===g.samples?null:g.tokens[k]])),inventoryValues:undefined,counterInventoryStats,additiveWithinLedger:!snapshotsOnly&&!inventory,canCombineWithOtherLedgers:false,globalConsumptionStatus:'Unavailable: inherited/delegated and overlapping ledger scopes not reconciled',actualRequestInputs:undefined,latestSampleInputs:undefined,countLabel:snapshotsOnly?'Usage samples':inventory?'Non-additive counter snapshots':g.ledger==='response'?'Response records':'Observed counter deltas',contextCountLabel:'Observed context samples; not a unique request count',tokenTotalStatus:inventory?'Non-additive counter inventory; not consumption':snapshotsOnly?'Unavailable: latest snapshots cannot establish an additive ledger':'Observed values within this ledger; global consumption unverified',inputP50:percentile(inputs,.5),inputP95:percentile(inputs,.95),inputSamples:inputs.length,latestSampleInputP50:percentile(g.latestSampleInputs,.5),latestSampleInputP95:percentile(g.latestSampleInputs,.95),latestInputObservations:g.latestSampleInputs.length,cacheHitRatio:snapshotsOnly||inventory||g.missing.cached_input_tokens||g.missing.input_tokens?null:g.tokens.input_tokens?g.tokens.cached_input_tokens/g.tokens.input_tokens:0,pricingStatus:snapshotsOnly?'Unavailable':g.pricedSamples===g.samples&&!g.partialPriceSamples?'Estimated':g.pricedSamples||g.partialPriceSamples?'Partial':'Unavailable',estimatedUsd:snapshotsOnly?null:g.pricedSamples?g.estimatedUsd:null};
     })};
   }
   performanceSummary({since=0}={}) {
@@ -62,7 +71,7 @@ export class ObservabilityService {
     for(const s of samples) {
       metrics.wall.push(s.wallMs);if(s.firstVisibleMs!=null) metrics.firstVisible.push(s.firstVisibleMs);
       if(s.toolsObserved && !s.missingToolEnds) metrics.tool.push(unionDuration(s.toolIntervals.map(([a,b])=>[Math.max(a,s.start),Math.min(b,s.end)])));
-      const entries=usage.filter(u=>u.threadId===s.threadId&&u.turnId===s.turnId&&u.scope==='cumulative-delta'&&!u.initialCounter);
+      const entries=usage.filter(u=>u.threadId===s.threadId&&u.turnId===s.turnId&&u.scope==='cumulative-delta'&&!u.initialCounter&&!u.discontinuity&&!u.outOfOrder);
       if(entries.length && entries.every(u=>u.usage.output_tokens!=null) && s.wallMs>0) metrics.effectiveThroughput.push(entries.reduce((n,u)=>n+u.usage.output_tokens,0)/(s.wallMs/1000));
     }
     const labels={wall:'Observed turn wall time',firstVisible:'Observed first-visible-output latency',tool:'Observed tool wall time (overlap-safe)',effectiveThroughput:'Rough end-to-end output tokens/second'};
@@ -72,7 +81,7 @@ export class ObservabilityService {
     if(!Number.isSafeInteger(bucketMs)||bucketMs<=0) throw new Error('invalid-correlation-bucket');
     const q=this.store.queryQuotaHistory({since}), buckets=new Map();
     for(const s of q) { const key=JSON.stringify([s.limit_id,s.window,Math.floor(s.timestamp/bucketMs)*bucketMs]);if(!buckets.has(key)) buckets.set(key,{limitId:s.limit_id,window:s.window,start:Math.floor(s.timestamp/bucketMs)*bucketMs,first:s.used_percent,last:s.used_percent,points:0});const b=buckets.get(key);b.last=s.used_percent;b.points++; }
-    const usage=this.rows('token_usage').filter(u=>u.timestamp>=since&&u.scope==='cumulative-delta'&&!u.initialCounter);
+    const usage=this.rows('token_usage').filter(u=>u.timestamp>=since&&u.scope==='cumulative-delta'&&!u.initialCounter&&!u.discontinuity&&!u.outOfOrder);
     const rows=[...buckets.values()].map(b=>{
       const samples=usage.filter(u=>u.timestamp>=b.start&&u.timestamp<b.start+bucketMs),missing=samples.filter(u=>u.usage.total_tokens==null).length;
       return {...b,usedPercentChange:b.points>1&&b.last>=b.first?b.last-b.first:null,tokenTotal:samples.length&&!missing?samples.reduce((n,u)=>n+u.usage.total_tokens,0):null,tokenSamples:samples.length,missingTokenSamples:missing,resetOrDiscontinuity:b.last<b.first};

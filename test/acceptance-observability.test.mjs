@@ -75,15 +75,92 @@ test('line-tail replay, actual archive move, and cumulative reset stay idempoten
   assert.equal(r.service.poll().discontinuities, 1);
   assert.equal(r.service.poll().usage, 0);
 
-  const group = r.service.summary({ groupBy: 'thread' }).groups.find(g => g.ledger === 'cumulative-delta');
-  assert.equal(group.tokens.input_tokens, 1580);
-  assert.equal(group.tokens.cached_input_tokens, 158);
-  assert.equal(group.tokens.cache_write_input_tokens, 32);
-  assert.equal(group.tokens.output_tokens, 158);
-  assert.equal(group.tokens.reasoning_output_tokens, 22); // Reasoning is a reported subset of output.
-  assert.equal(group.tokens.total_tokens, 1738); // input + output; do not add cached/reasoning again.
-  assert.equal(group.discontinuities, 1);
-  assert.equal(r.service.summary({ groupBy: 'model' }).groups[0].key, 'Unknown (initial thread counter)');
+  // A late pre-reset snapshot is retained as inventory but cannot roll back the reset baseline.
+  fs.appendFileSync(moved, cumulative(t0 + 4, counters({ input: 1400, cached: 140, write: 28, output: 140, reasoning: 16 })));
+  assert.equal(r.service.poll().usage, 1);
+  fs.appendFileSync(moved, cumulative(t0 + 6, counters({ input: 120, cached: 12, write: 4, output: 12, reasoning: 3 })));
+  assert.equal(r.service.poll().usage, 1);
+
+  const groups = r.service.summary({ groupBy: 'thread' }).groups;
+  const delta = groups.find(g => g.ledger === 'cumulative-delta');
+  const inventory = groups.find(g => g.ledger === 'baseline-counter-inventory');
+  // Only observed counter changes within epochs add: +500 before reset, +40 after reset.
+  assert.equal(delta.tokens.input_tokens, 540);
+  assert.equal(delta.tokens.cached_input_tokens, 54);
+  assert.equal(delta.tokens.cache_write_input_tokens, 12);
+  assert.equal(delta.tokens.output_tokens, 54);
+  assert.equal(delta.tokens.reasoning_output_tokens, 11); // Reasoning is a reported subset of output.
+  assert.equal(delta.tokens.total_tokens, 594); // input + output; do not add cache/reasoning again.
+  assert.equal(delta.additiveWithinLedger, true);
+  assert.equal(delta.canCombineWithOtherLedgers, false);
+  assert.equal(inventory.samples, 3); // Initial, reset, and late/out-of-order snapshots.
+  assert.equal(inventory.tokens.input_tokens, null);
+  assert.equal(inventory.counterInventoryStats.input_tokens.max, 1400);
+  assert.equal(inventory.counterInventoryStats.total_tokens.max, 1540);
+  assert.equal(inventory.estimatedUsd, null);
+  assert.equal(inventory.pricingStatus, 'Unavailable');
+  assert.equal(inventory.additiveWithinLedger, false);
+  assert.equal(inventory.canCombineWithOtherLedgers, false);
+  assert.equal(inventory.discontinuities, 1);
+  assert.equal(r.service.rows('token_usage').filter(row => row.outOfOrder).length, 1);
+  assert.match(r.service.summary().coverage, /initial\/reset\/reordered counters are non-additive inventory/);
+  const byModel = r.service.summary({ groupBy: 'model' }).groups.find(g => g.ledger === 'baseline-counter-inventory');
+  assert.equal(byModel.key, 'Counter inventory (unknown attribution)');
+});
+
+test('legacy initial-counter flags remain inventory and cannot produce a price', t => {
+  const r = rig(t);
+  const legacy = { threadId: 'SYNTH_LEGACY_THREAD_1A', turnId: 'SYNTH_LEGACY_TURN_2B', model: 'gpt-6.1-sol', provider: 'openai', serviceTier: 'standard', timestamp: t0,
+    scope: 'cumulative-delta', initialCounter: true, usage: counters({ input: 77738040827, cached: 700, write: 80, output: 218796327, reasoning: 100 }) };
+  const original = JSON.stringify(legacy);
+  r.store.db.prepare('INSERT INTO token_usage VALUES(?,?,?,?)').run('legacy-baseline-fixture', legacy.threadId, legacy.turnId, original);
+
+  const summary = r.service.summary({ groupBy: 'thread' });
+  const inventory = summary.groups.find(g => g.ledger === 'baseline-counter-inventory');
+  assert.ok(inventory);
+  assert.equal(inventory.samples, 1);
+  assert.equal(inventory.tokens.total_tokens, null);
+  assert.equal(inventory.counterInventoryStats.input_tokens.max, 77738040827);
+  assert.equal(inventory.estimatedUsd, null);
+  assert.equal(inventory.pricingStatus, 'Unavailable');
+  assert.equal(inventory.tokenTotalStatus, 'Non-additive counter inventory; not consumption');
+  assert.equal(inventory.additiveWithinLedger, false);
+  assert.equal(summary.coverage.includes('global/root-child consumption is unverified'), true);
+  assert.equal(r.store.db.prepare('SELECT metadata_json FROM token_usage WHERE id=?').get('legacy-baseline-fixture').metadata_json, original);
+});
+
+test('actual response IDs, counter deltas, and counter inventory remain separate ledgers', t => {
+  const r = rig(t);
+  const baseline = counters({ input: 1000, cached: 100, write: 20, output: 100, reasoning: 10 });
+  const advanced = counters({ input: 1100, cached: 110, write: 25, output: 120, reasoning: 12 });
+  const actual = counters({ input: 40, cached: 10, write: 5, output: 10, reasoning: 3 });
+  fs.appendFileSync(r.file, cumulative(t0 + 2, baseline) + cumulative(t0 + 3, advanced) + response(t0 + 4, 'SYNTH_RESPONSE_SHARED_310C', actual));
+  const forkFile = path.join(r.sessions, 'fork.jsonl');
+  fs.writeFileSync(forkFile, [
+    { timestamp: new Date(t0).toISOString(), type: 'session_meta', payload: { id: 'SYNTH_FORK_THREAD_481B', parent_thread_id: 'SYNTH_THREAD_ID_7F3A', model_provider: 'openai' } },
+    { timestamp: new Date(t0 + 1).toISOString(), type: 'turn_context', payload: { turn_id: 'SYNTH_FORK_TURN_18A0', model: 'gpt-6.1-sol', model_provider: 'openai', service_tier: 'standard' } },
+  ].map(value => JSON.stringify(value) + '\n').join('') + response(t0 + 5, 'SYNTH_RESPONSE_SHARED_310C', actual));
+  r.service.poll();
+
+  const summary = r.service.summary({ groupBy: 'thread' });
+  const responseGroup = summary.groups.find(g => g.ledger === 'response');
+  const delta = summary.groups.find(g => g.ledger === 'cumulative-delta');
+  const inventory = summary.groups.find(g => g.ledger === 'baseline-counter-inventory');
+  assert.ok(responseGroup && delta && inventory);
+  assert.equal(responseGroup.samples, 1); // Same provider/response ID in the fork is deduped.
+  assert.equal(responseGroup.tokens.input_tokens, 40);
+  assert.equal(responseGroup.tokens.output_tokens, 10);
+  assert.equal(responseGroup.inputSamples, 1); // Actual per-response input, not cumulative context.
+  assert.equal(responseGroup.pricingStatus, 'Estimated');
+  assert.equal(delta.tokens.input_tokens, 100);
+  assert.equal(delta.tokens.output_tokens, 20);
+  assert.equal(inventory.tokens.input_tokens, null);
+  assert.equal(inventory.estimatedUsd, null);
+  assert.equal(summary.duplicateResponseRecords, 1);
+  assert.equal(summary.groups.every(g => g.canCombineWithOtherLedgers === false), true);
+  assert.equal(Object.hasOwn(summary, 'estimatedUsd'), false); // No synthesized cross-ledger total.
+  assert.equal(summary.coverage.includes('Response, counter-delta and latest-sample ledgers overlap and must not be added together'), true);
+  assert.equal(summary.coverage.includes('global/root-child consumption is unverified'), true);
 });
 
 test('pricing uses request input at the exact context boundary and keeps historical policy snapshots', t => {
