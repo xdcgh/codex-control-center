@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import "./style.css";
+import { quotaMetrics } from './quota-metrics.mjs';
 
 type WindowQuota = {
   durationMinutes: number;
@@ -159,7 +160,7 @@ function App() {
       .catch((e) => setError(String(e)));
     void request<Snapshot>("snapshot")
       .then(setSnapshot)
-      .catch((e) => {setError(String(e));setPage('Diagnostics');});
+      .catch((e) => {const reason=String(e);setError(reason);if(/owner-anchor|configuration|binding|resources-unavailable/.test(reason))setPage('Diagnostics');});
     const registrations = [
       listen<Snapshot>("core/snapshot", (event) => {
         setSnapshot(event.payload);
@@ -185,7 +186,7 @@ function App() {
       void getCurrentWindow().setAlwaysOnTop(prefs.widgetPinned);
       if (view === "widget")
         void getCurrentWindow().setSize(
-          new LogicalSize(310, prefs.widgetExpanded ? 390 : 275),
+          new LogicalSize(310, prefs.widgetExpanded ? 360 : 260),
         );
     }
   }, [prefs, view, small]);
@@ -204,6 +205,7 @@ function App() {
         <header
           className="mini-header"
           onMouseDown={(event) => {
+            if((event.target as Element).closest('button'))return;
             if (event.button === 0 && !prefs?.widgetLocked)
               void getCurrentWindow().startDragging();
           }}
@@ -237,6 +239,7 @@ function App() {
               <b>{number(waiting)}</b> Waiting
             </span>
           </div>
+          <p className="caption ellipsis">{s?.tasks.find(t=>t.phase==='watching')?.modelId??'Model unavailable'} · Turn output: Unavailable</p>
           {prefs?.widgetExpanded || view === "compact" ? (
             <>
               <p className="caption">
@@ -265,7 +268,7 @@ function App() {
               void preference({ widgetExpanded: !prefs?.widgetExpanded })
             }
           >
-            ↕
+            {prefs?.widgetExpanded?'Compact':'Expand'}
           </button>
           <button
             title="Lock position"
@@ -616,7 +619,8 @@ function ThreadList({
   action: (fn: () => Promise<unknown>) => Promise<void>;
   compact?: boolean;
 }) {
-  if (!tasks.length)
+  const displayed=(compact?tasks.filter(task=>task.phase!=='inactive'):[...tasks]).sort((a,b)=>{const order=['watching','dispatching','waitingQuota','needsUser','needsAttention','inactive'];return order.indexOf(a.phase)-order.indexOf(b.phase)||(b.lastActivityAt??0)-(a.lastActivityAt??0);});
+  if (!displayed.length)
     return (
       <div className="empty">
         <span>☷</span>
@@ -629,7 +633,7 @@ function ThreadList({
     );
   return (
     <div className="thread-list">
-      {tasks.map((task) => (
+      {displayed.map((task) => (
         <article className="thread" key={task.threadId}>
           <div className="thread-icon">{task.kind === "goal" ? "◎" : "↳"}</div>
           <div className="thread-main">
@@ -772,7 +776,7 @@ function QuotaHistory({ now }: { now: number }) {
       .then((value) => setSamples(value.samples))
       .catch((e) => setError(String(e)));
   }, [range, Math.floor(now / 60000)]);
-  const duration = range <= 24 ? 300 : 10080;
+  const duration = 300;
   const series = samples
     .filter((s) => s.window === duration)
     .sort((a, b) => a.timestamp - b.timestamp);
@@ -797,6 +801,7 @@ function QuotaHistory({ now }: { now: number }) {
   }
   const hourly = span > 0 ? (burn / span) * 3600000 : null,
     latest = series.at(-1);
+  const metrics=quotaMetrics(samples,duration,now);
   const resetMarkers = [300, 10080].flatMap((window) => {
     const rows = samples.filter((s) => s.window === window);
     return rows.filter(
@@ -895,28 +900,26 @@ function QuotaHistory({ now }: { now: number }) {
       </section>
       <div className="metric-grid">
         <Metric
-          label="Observed burn / hour"
-          value={hourly == null ? "Unavailable" : `${number(hourly, 2)}%`}
-          note={`Same-window positive deltas · ${duration === 300 ? "5h" : "7d"}`}
+          label="Current 5h window average / hour"
+          value={metrics.currentAverage == null ? "Unavailable" : `${number(metrics.currentAverage, 2)}%`}
+          note="Used quota divided by elapsed current-window time"
         />
         <Metric
           label="Projected exhaustion"
           value={
-            hourly && latest
-              ? date(now + (latest.remaining_percent / hourly) * 3600000)
-              : "Unavailable"
+            metrics.resetFirst?'Reset expected first':metrics.forecastAt?date(metrics.forecastAt):'Unavailable'
           }
-          note="Estimated from observed average; usage may change"
+          note="Estimated from the current reset segment; reset caps the projection"
         />
         <Metric
-          label="Stored samples"
-          value={number(samples.length)}
-          note="Actual samples in selected range"
+          label="Recent 15-minute burn / hour"
+          value={metrics.recentRate==null?'Unavailable':`${number(metrics.recentRate,2)}%`}
+          note="Latest observed trend within the same reset segment"
         />
         <Metric
-          label="Window changes"
-          value={number(resetMarkers.length)}
-          note="Observed quota drop or changed reset time"
+          label="Selected-range average / hour"
+          value={metrics.selectedRangeBurn==null?'Unavailable':`${number(metrics.selectedRangeBurn,2)}%`}
+          note={`${samples.length} retained samples · ${resetMarkers.length} window changes`}
         />
       </div>
     </>
@@ -1246,9 +1249,9 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
     [data, setData] = useState<{ groups: AnalyticsGroup[] } | null>(null),
     [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    request<{ groups: AnalyticsGroup[] }>("analytics/summary", { groupBy })
-      .then(setData)
-      .catch((e) => setError(String(e)));
+    let active=true;setData(null);setError(null);
+    const load=()=>request<{groups:AnalyticsGroup[]}>('analytics/summary',{groupBy}).then(value=>{if(active){setData(value);setError(null);}}).catch(e=>{if(active)setError(String(e));});
+    void load();const timer=setInterval(()=>void load(),30000);return()=>{active=false;clearInterval(timer);};
   }, [groupBy]);
   return (
     <>
@@ -1279,7 +1282,7 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
         </div>
         {error ? (
           <p className="error">{error}</p>
-        ) : data?.groups.length ? (
+        ) : !data ? (<div className="empty"><h3>Loading local token observations…</h3><p>Reading real indexed telemetry. No empty result is assumed while the request is pending.</p></div>) : data.groups.length ? (
           <div className="table-scroll">
             <table>
               <thead>
