@@ -17,4 +17,8 @@ npm test
 
 The original recovery engine remains in `src/`, with its original test suite in `test/`. The original installed watchdog is retained separately during development. The [migration baseline](docs/baseline.md) records provenance and rollback. The [historical watchdog guide](docs/legacy-watchdog.md) describes the baseline behavior, including its old reset buffer.
 
+Core v2 polls actual quota every 10 seconds by default, saves quota history independently every 60 seconds, and resumes eligible work without a reset buffer. Both short and weekly blocking windows must be available. Fresh-state/Goal checks and the durable send ledger prevent unsafe repeat dispatch; priority, quota reserve, concurrency and manual controls guard the queue. Unknown Desktop versions leave monitoring available and disable automatic writes.
+
+The headless suite currently passes 52 tests. Live read-only Doctor probes also passed on the pinned CLI/Desktop version. Desktop packaging and the new natural quota-cycle acceptance are still in progress.
+
 See [requirements](docs/requirements.md), [architecture decisions](docs/adr/001-desktop-stack.md), [security policy](SECURITY.md), and [third-party notices](THIRD_PARTY_NOTICES.md). Distribution packages will be published only after the security gate and required acceptance checks pass.

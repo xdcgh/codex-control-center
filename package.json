@@ -1,12 +1,22 @@
 {
-  "name": "codex-quota-watchdog",
+  "name": "codex-control-center",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.mjs",
     "doctor": "node --disable-warning=ExperimentalWarning src/cli.mjs doctor",
-    "status": "node --disable-warning=ExperimentalWarning src/cli.mjs status"
+    "status": "node --disable-warning=ExperimentalWarning src/cli.mjs status",
+    "core": "node --disable-warning=ExperimentalWarning src/core-cli.mjs",
+    "core:doctor": "node --disable-warning=ExperimentalWarning src/core-cli.mjs doctor",
+    "core:sidecar": "node --disable-warning=ExperimentalWarning src/core-cli.mjs sidecar"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
   }
 }

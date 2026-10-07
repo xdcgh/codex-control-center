@@ -13,7 +13,11 @@ Updated: 2026-10-07 (Asia/Shanghai).
 | Community research | COMPLETE: all eleven requested repositories inspected | Pinned HEADs, actual licenses, official protocol/framework sources in `docs/research.md` |
 | Stack decision | Tauri 2 + Rust + React/TypeScript + existing Node sidecar | ADR accepted; no measured memory claim |
 | Publication surface scan | PASS: Gitleaks 8.30.1 history and working files, private-path review | Initial source import; repeat for changed stages |
-| New core | In progress | Not yet live-enabled |
+| Core v2 headless suite | PASS: 52/52, including 25 baseline and 17 independent acceptance tests | Real temporary SQLite; simulated adapters, no live turn |
+| Core v2 live execution | Pending safe ownership handover | Preserve legacy records and send ledger; never run two execution owners |
+| Core v2 scheduler | Priority/reserve/concurrency/cooldown/retries/manual policy implemented and tested | ACK lag and new-Turn lifecycle keep concurrency slots occupied |
+| Desktop GUI | In progress | Tauri shell reuses the background core through an authenticated local named pipe |
+| Token/pricing/performance | In progress | Separate Sol module with source quality and missing-data labels |
 | New Desktop smoke | Not run | Existing scripts provision owned tests and consume model quota |
 | Natural quota cycle | NOT OBSERVED | Cannot be replaced by fixture tests |
 | Public repository | Created and initial commits/tags verified remotely | https://github.com/xdcgh/codex-control-center; passed history/working-file security gate |

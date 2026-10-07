@@ -4,7 +4,7 @@ An item is checked only when its deliverable and associated evidence exist. Simu
 
 - [x] Phase 0: inspect legacy code, pass baseline unit tests, preserve runtime privately, commit and tag legacy baseline, import source with migration provenance.
 - [x] Phase 1: current community/protocol/framework research, licenses, telemetry semantics, stack ADR.
-- [ ] Phase 2: adapters, live quota polling (10 seconds), independent history sampling (60 seconds), durable scheduling, SQLite, compatibility and doctor; pass headless tests first.
+- [x] Phase 2: adapters, live quota polling (10 seconds), independent history sampling (60 seconds), durable scheduling, SQLite, compatibility and doctor; headless suite and live read-only probes passed.
 - [ ] Phase 3: Windows dashboard, threads, quota, tray, settings, diagnostics.
 - [ ] Phase 4: quota charts, token/model/tier/effort analytics, context-aware versioned API-equivalent pricing.
 - [ ] Phase 5: performance telemetry with exact, estimated, and unavailable distinctions.

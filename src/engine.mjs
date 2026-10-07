@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { assess, quotaStatus, goalIdentity, settingsFingerprint, latestTurn, isUuid, CONTINUATION } from './policy.mjs';
 
 export class WatchdogEngine {
-  constructor({ store, desktop, account, now = Date.now, enabled, execute = false, resetBufferMs = 120000, log = () => {}, state, enrollmentSince, verifyDesktop = () => {} }) {
+  constructor({ store, desktop, account, now = Date.now, enabled, execute = false, resetBufferMs = 120000, quotaProbeMode = 'legacy', continuationText = CONTINUATION, log = () => {}, state, enrollmentSince, verifyDesktop = () => {} }) {
     Object.assign(this, { store, desktop, account, now, enabled, execute, resetBufferMs, log, enrollmentSince, verifyDesktop });
+    Object.assign(this, { quotaProbeMode, continuationText });
     this.state = state ?? store.load();
     this.state.startedAt ??= new Date(now()).toISOString();
   }
@@ -76,11 +77,12 @@ export class WatchdogEngine {
       }
     }
     if (record.phase === 'needsAttention') return decision;
-    if (quota?.known && record.notBeforeMs == null) {
+    if (this.quotaProbeMode === 'live') record.notBeforeMs = this.now();
+    else if (quota?.known && record.notBeforeMs == null) {
       const reset = quota.ready && Number.isFinite(record.lastQuotaResetMs) ? record.lastQuotaResetMs : quota.resetsAtMs;
       record.notBeforeMs = Number.isFinite(reset) ? reset + this.resetBufferMs : this.now() + this.resetBufferMs;
     }
-    if (quota?.known && !quota.ready && record.notBeforeMs <= this.now() && quota.resetsAtMs > this.now()) record.notBeforeMs = quota.resetsAtMs + this.resetBufferMs;
+    if (this.quotaProbeMode !== 'live' && quota?.known && !quota.ready && record.notBeforeMs <= this.now() && quota.resetsAtMs > this.now()) record.notBeforeMs = quota.resetsAtMs + this.resetBufferMs;
     return decision;
   }
   assertFresh(record, state, { goalRestored = false } = {}) {
@@ -91,10 +93,10 @@ export class WatchdogEngine {
   }
   async recover(threadId) {
     const record = this.state.records[threadId];
-    if (!record?.failureTurnId || record.phase === 'inactive' || record.phase === 'needsAttention' || record.notBeforeMs == null || this.now() < record.notBeforeMs || !this.enabled()) return false;
+    if (!record?.failureTurnId || record.phase === 'inactive' || record.phase === 'needsAttention' || record.notBeforeMs == null || this.now() < record.notBeforeMs || !this.enabled(threadId)) return false;
     const quota = quotaStatus(await this.account.request('account/rateLimits/read'), this.now());
     if (!quota.known || !quota.ready) {
-      if (quota.known && quota.resetsAtMs > this.now()) record.notBeforeMs = Math.max(record.notBeforeMs, quota.resetsAtMs + this.resetBufferMs);
+      if (this.quotaProbeMode !== 'live' && quota.known && quota.resetsAtMs > this.now()) record.notBeforeMs = Math.max(record.notBeforeMs, quota.resetsAtMs + this.resetBufferMs);
       this.transition(record, 'waitingQuota', quota.reason);
       this.save(); return false;
     }
@@ -109,7 +111,7 @@ export class WatchdogEngine {
     catch (error) { this.transition(record, 'inactive', error.message); this.save(); return false; }
     if (!this.execute) { this.transition(record, 'waitingQuota', 'observe-mode-would-resume'); this.save(); return false; }
     this.verifyDesktop();
-    if (!this.enabled()) return false;
+    if (!this.enabled(threadId)) return false;
     intent ??= this.state.ledger[key] = { threadId, failureTurnId: record.failureTurnId, messageId: randomUUID(), createdAt: this.now(), phase: 'prepared' };
     try {
       if (record.goalStatus === 'usageLimited') {
@@ -120,7 +122,7 @@ export class WatchdogEngine {
         if (before.tokenBudget != null && before.tokensUsed >= before.tokenBudget) throw new Error('goal-budget-exhausted');
         if (before.status === 'usageLimited') {
           intent.phase = 'goalRestoring'; this.save();
-          if (!this.enabled()) return false;
+          if (!this.enabled(threadId)) return false;
           const restored = (await this.account.request('thread/goal/set', { threadId, status: 'active' })).goal;
           if (restored.status !== 'active' || goalIdentity(restored) !== record.goalIdentity || restored.tokensUsed !== before.tokensUsed) throw new Error('goal-restore-verification-failed');
         }
@@ -132,7 +134,7 @@ export class WatchdogEngine {
       this.assertFresh(record, fresh.state, { goalRestored: record.goalStatus === 'usageLimited' });
       if (first.owner !== fresh.owner) throw new Error('desktop-owner-changed');
       const finalQuota = quotaStatus(await this.account.request('account/rateLimits/read'), this.now());
-      if (!finalQuota.known || !finalQuota.ready || !this.enabled()) {
+      if (!finalQuota.known || !finalQuota.ready || !this.enabled(threadId)) {
         this.transition(record, 'waitingQuota', finalQuota.reason); this.save(); return false;
       }
       this.verifyDesktop();
@@ -141,11 +143,11 @@ export class WatchdogEngine {
       // Persist intent before one and only one write. A lost acknowledgement never causes replay.
       intent.phase = 'dispatching'; intent.sentAt = this.now();
       this.transition(record, 'dispatching', 'sending-continuation'); this.save();
-      if (!this.enabled()) { intent.phase = record.goalStatus === 'usageLimited' ? 'goalRestored' : 'prepared'; this.save(); return false; }
+      if (!this.enabled(threadId)) { intent.phase = record.goalStatus === 'usageLimited' ? 'goalRestored' : 'prepared'; this.save(); return false; }
       const response = await this.desktop.request('thread-follower-start-turn', {
         conversationId: threadId,
         turnStart: { request: { threadId, clientUserMessageId: intent.messageId,
-          input: [{ type: 'text', text: CONTINUATION, text_elements: [] }] },
+          input: [{ type: 'text', text: this.continuationText, text_elements: [] }] },
           context: { inheritThreadSettings: true } },
       }, fresh.owner);
       const turnId = response.result?.result?.turn?.id;

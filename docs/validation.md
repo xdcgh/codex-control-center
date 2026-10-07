@@ -7,10 +7,15 @@ Updated 2026-10-07. This page separates baseline evidence, research, simulations
 | Check | Result | Scope and limits |
 | --- | --- | --- |
 | Legacy Node unit suite | **PASS: 25/25; 0 failed** | Isolated unit tests from the imported watchdog; no live model request. |
+| Full repository `npm test` suite | **PASS: 52/52; 0 failed** | Includes baseline tests, Core v2 fixtures and black-box acceptance tests using simulated adapters and temporary SQLite. No real Codex turn was started. |
 | Legacy repository state | **Saved** | Legacy source baseline commit `56175194b7c4896c64636d161ecab4d0457beacc`, tag `legacy-watchdog-baseline-2026-10-07`. The original runtime daemon was not stopped or modified. |
 | New repository migration baseline | **Saved** | Initial import commit `e115cae` and tag `legacy-import-baseline-2026-10-07`. |
 | Existing Desktop smoke scripts | **Inspected, not run** | They create owned test Threads/Goals, navigate Desktop, send model turns and write receipts. Their side effects were excluded from Phase 0 read-only validation. |
 | Natural quota cycle | **NOT OBSERVED** | The 25 unit tests do not simulate or establish a real quota reset. See [acceptance record](../E2E-NATURAL-QUOTA-CYCLE.md). |
+
+### Legacy natural-event observation (not Core v2 acceptance)
+
+On 2026-10-07, the legacy watchdog recorded a Goal in `waitingQuota` at `02:51:39.149Z` with the 5-hour reset timestamp `1791343173` (`11:19:33 +08:00`). The legacy watchdog reported a continuation accepted at `03:21:44.163Z`. Record classification: **LEGACY / INCOMPLETE for Core v2**. This is operational evidence from the old daemon, not evidence for the new 10-second detector, scheduler, or Core v2 persistence. It must not be copied into the Core v2 natural-cycle acceptance as a pass.
 
 ## Phase 1 — Research
 
@@ -27,18 +32,18 @@ Source and license review is recorded in [research.md](research.md). Token/accou
 
 | Tool | Observation | Interpretation |
 | --- | --- | --- |
-| Rust / Cargo | `rustc` and `cargo` were not on PATH | Not available in the inspected shell; no install attempted. |
+| Rust / Cargo | Initial shell probe did not find `rustc` or `cargo` on PATH. A task-specific Rust 1.99 toolchain was subsequently installed outside global PATH. | The compiler toolchain is present for this task; the default shell still needs its explicit path/environment. No global PATH change was made. |
 | MSVC C++ toolchain | Visual Studio Build Tools `18.10.12224.181`; MSVC tools `14.51.36231`; x86/x64 VC Tools component and `cl.exe` exist | Installed. `cl.exe` is not on the inspected shell PATH, so invoke through a Developer Command Prompt or an explicit VS environment. No compilation was run. |
 | .NET SDK | `dotnet.exe` is present; `dotnet --list-sdks` returned no SDK entries | No .NET SDK detected. .NET Core and Windows Desktop runtimes 8.0.14 and 9.0.3 are installed. |
 | WebView2 runtime | Runtime directories and `msedgewebview2.exe` / `EmbeddedBrowserWebView.dll` observed under `C:\Program Files (x86)\Microsoft\EdgeWebView\Application` (`154.0.4258.37`, `154.0.4258.53`) | Runtime appears installed. No Tauri app launch/loader test was performed. |
 
-`rustc` and `cargo` were not found on PATH; this check did not search every filesystem location. It does not verify a Tauri build, WebView2 loader resolution inside the app, code signing, installer packaging, or application runtime.
+This is a tool-presence record, not a build result. The task-specific Rust toolchain is not added to global PATH. It does not verify a Tauri build, WebView2 loader resolution inside the app, code signing, installer packaging, or application runtime.
 
 ## Later phase evidence
 
 | Phase | Required evidence | Current state |
 | --- | --- | --- |
-| Phase 2 — Core v2 | Deterministic parser/state/scheduler tests; app-server integration with explicit authorization; durable-state restart tests; no duplicate dispatch | Pending |
+| Phase 2 — Core v2 | Deterministic parser/state/scheduler tests; app-server integration with explicit authorization; durable-state restart tests; no duplicate dispatch | **Fixture suite PASS (included in 52/52); phase remains pending** for runtime integration and owner handover |
 | Phase 3 — Desktop MVP | Packaged Tauri shell; tray/window/widget behavior and UI smoke | Pending |
 | Phase 4 — Observability | Quota history, token attribution and price-policy tests with exact/estimated/unavailable distinctions | Pending |
 | Phase 5 — Performance | Instrumented client timings with labels that distinguish visible end-to-end timing from unavailable model timing | Pending |
