@@ -7,6 +7,11 @@ const clean=v=>typeof v==='string'&&/^[a-zA-Z0-9._-]{1,100}$/.test(v)?v:null;
 const timestamp=v=>Number.isSafeInteger(v)&&v>=0?v:null;
 const version=v=>typeof v==='string'&&/^v?\d[0-9a-zA-Z.+-]{0,60}$/.test(v)?v:null;
 const versions=v=>({cliVersion:version(v?.cliVersion),desktopVersion:version(v?.desktopVersion)});
+const quotaError=t=>['usageLimitExceeded','UsageLimitExceeded'].includes(t?.error?.codexErrorInfo);
+function historyTurns(snapshot) {
+  const history=snapshot.turnHistory?.kind==='canonical'?Object.values(snapshot.turnHistory.history?.entitiesByKey??{}):[];
+  return [...history,...(Array.isArray(snapshot.turns)?snapshot.turns:[])].filter(t=>t&&typeof t.turnId==='string');
+}
 
 // This recorder observes evidence only. It never dispatches work or mutates a Goal.
 export class NaturalCycleRecorder {
@@ -33,7 +38,7 @@ export class NaturalCycleRecorder {
   }
   onThread({threadId,snapshot,decision,record,intent,observedAt=this.now(),source='unknown',versions:observedVersions}={}) {
     if(typeof threadId!=='string'||!threadId||timestamp(observedAt)==null||snapshot?.id!==threadId) return;
-    const turn=latestTurn(snapshot), turnId=turn?.turnId, structured=turn?.status==='failed'&&['usageLimitExceeded','UsageLimitExceeded'].includes(turn?.error?.codexErrorInfo);
+    const turn=latestTurn(snapshot), turnId=turn?.turnId, structured=turn?.status==='failed'&&quotaError(turn),history=historyTurns(snapshot);
     if((decision?.action==='running'||turn?.status==='inProgress')&&turnId) this.state.working[threadId]={observedAt,turnId,real:real(source),synthetic:synthetic(source)};
     if((structured||decision?.action==='quotaFailure')&&turnId) {
       const key=this.fingerprint(threadId+':'+turnId);
@@ -49,16 +54,30 @@ export class NaturalCycleRecorder {
       if(record?.phase==='waitingQuota'&&c.waitingRecordedAt==null) c.waitingRecordedAt=observedAt;
     }
     for(const c of this.cycles(threadId)) {
-      if(c.kind==='ordinary'&&c.nextTurnEndAt!=null||c.kind==='goal'&&c.goalCompletedAt!=null) continue;
+      if(c.kind==='goal'&&c.goalCompletedAt!=null) continue;
       c.syntheticEvidence||=synthetic(source);
       if(intent) this.observeIntent(c,intent,observedAt,source);
-      if(turnId&&turnId!==c.failureTurnId) {
-        if(c.nextTurnId&&turnId!==c.nextTurnId) { c.unrelatedTurnObserved=true;continue; }
-        c.observedNextTurnId=turnId;c.nextTurnObservedAt??=observedAt;
-        if(['completed','failed','interrupted'].includes(turn.status)) { c.nextTurnEndAt??=observedAt;c.nextTurnStatus=turn.status;c.endReal=real(source); }
+      const successor=this.cycles(threadId).find(n=>n.id!==c.id&&n.failureTurnId===c.nextTurnId&&n.goalFingerprint===c.goalFingerprint&&n.structuredFailure);
+      if(successor) { c.successorCycleFingerprint=successor.id;c.unrelatedTurnObserved=false; }
+      // A later tail belongs to a later episode. Resolve this episode's confirmed
+      // target from history instead of attributing whichever turn is newest.
+      const target=c.nextTurnId?history.find(t=>t.turnId===c.nextTurnId):null;
+      if(target) {
+        c.observedNextTurnId=target.turnId;c.nextTurnObservedAt??=observedAt;c.nextTurnSeenReal=real(source);c.nextTurnStatus=target.status;
+        c.nextTurnStartedAt??=timestamp(target.turnStartedAtMs);
+        if(target.status==='inProgress') c.nextTurnRunningObservedAt??=observedAt;
+        if(['completed','failed','interrupted'].includes(target.status)) {
+          c.nextTurnEndAt??=observedAt;c.endReal=real(source);
+          c.nextTurnErrorCode=quotaError(target)?'usageLimitExceeded':target.error?.codexErrorInfo?'other-error':null;
+          c.nextTurnCompletedAt??=timestamp(target.turnCompletedAtMs);
+        }
+        if(c.unrelatedTurnObserved&&c.receipt&&c.dispatches.length===1) c.unrelatedTurnObserved=false;
+      } else if(turnId&&turnId!==c.failureTurnId&&!c.nextTurnId) {
+        c.unconfirmedNextTurnObserved=true;
       }
-      if(c.kind==='goal'&&snapshot.threadGoal&&this.fingerprint(goalIdentity(snapshot.threadGoal))!==c.goalFingerprint) c.goalChanged=true;
-      if(c.kind==='goal'&&!c.goalChanged&&['complete','completed'].includes(snapshot.threadGoal?.status)) { c.goalCompletedAt??=observedAt;c.goalCompletionReal=real(source); }
+      const currentGoal=snapshot.threadGoal??snapshot.completedThreadGoal;
+      if(c.kind==='goal'&&currentGoal&&this.fingerprint(goalIdentity(currentGoal))!==c.goalFingerprint) c.goalChanged=true;
+      if(c.kind==='goal'&&!c.goalChanged&&['complete','completed'].includes(currentGoal?.status)) { c.goalCompletedAt??=observedAt;c.goalCompletionReal=real(source); }
     }
     this.save();
   }
@@ -109,21 +128,35 @@ export class NaturalCycleRecorder {
       if(!c.dispatches.length) reasons.push('dispatch-intent-missing');
       if(!c.receipt) reasons.push('transport-receipt-missing');
       if(c.autoResumedAt==null) reasons.push('automatic-resume-event-missing');
+      const episodeReasons=[...reasons];
+      if(c.observedNextTurnId!==c.nextTurnId||!c.nextTurnId||!(c.nextTurnSeenReal||c.endReal)) episodeReasons.push('confirmed-next-turn-lifecycle-not-observed');
+      const continuedObserved=c.nextTurnRunningObservedAt!=null||c.nextTurnStatus==='inProgress'||c.nextTurnStatus==='completed'||c.nextTurnObservedAt!=null&&c.nextTurnEndAt!=null&&c.nextTurnObservedAt<c.nextTurnEndAt;
+      if(!continuedObserved) episodeReasons.push('continued-work-lifecycle-not-observed');
       if(c.nextTurnEndAt==null) reasons.push('next-turn-end-not-observed');
       if(c.kind==='goal'&&c.goalCompletedAt==null) reasons.push('goal-completion-not-observed');
       const allReal=[c.failureReal,c.workingReal,c.blockedQuotaReal,...c.dispatches.map(d=>d.real)].every(Boolean)&&(c.detectedRecoveryAt==null||c.recoveryReal)&&( !c.receipt||c.receiptReal)&&(c.autoResumedAt==null||c.autoResumeReal)&&(c.nextTurnEndAt==null||c.endReal)&&(c.goalCompletedAt==null||c.goalCompletionReal);
-      if(!allReal) reasons.push('real-source-provenance-incomplete');
+      if(!allReal) { reasons.push('real-source-provenance-incomplete');episodeReasons.push('real-source-provenance-incomplete'); }
+      const repeatedQuota=c.nextTurnStatus==='failed'&&c.nextTurnErrorCode==='usageLimitExceeded';
+      const failedOther=c.nextTurnStatus==='failed'&&c.nextTurnErrorCode==='other-error';
+      const failedUnknown=c.nextTurnStatus==='failed'&&!c.nextTurnErrorCode;
+      const turnOutcome=repeatedQuota?(continuedObserved?'CONTINUED_THEN_QUOTA_LIMITED':'RESUME_ATTEMPT_QUOTA_LIMITED'):failedOther?'FAILED_OTHER_ERROR':failedUnknown?'FAILED_ERROR_UNAVAILABLE':c.nextTurnStatus==='interrupted'?'INTERRUPTED':c.nextTurnStatus==='completed'?'TURN_COMPLETED':c.nextTurnStatus==='inProgress'?'CONTINUING':'UNOBSERVED';
       let status=reasons.length?'INCOMPLETE':'PASS';
       if(c.manualOverride||c.uncertain||c.unrelatedTurnObserved||c.goalChanged||c.dispatches.length&&!c.receipt) status='UNKNOWN';
-      if(c.dispatches.length>1||['failed','interrupted'].includes(c.nextTurnStatus)) status='FAIL';
+      if(failedUnknown) { status='UNKNOWN';reasons.push('failed-next-turn-error-classification-unavailable'); }
+      if(repeatedQuota) { if(status==='PASS') status='INCOMPLETE';reasons.push('continued-then-quota-limited-again'); }
+      if(c.dispatches.length>1||failedOther||c.nextTurnStatus==='interrupted') status='FAIL';
       if(c.syntheticEvidence) status='SIMULATED';
       if(c.manualOverride) reasons.push('manual-override-observed');if(c.uncertain) reasons.push('uncertain-delivery-observed');if(c.unrelatedTurnObserved) reasons.push('unrelated-next-turn-observed');if(c.goalChanged) reasons.push('goal-identity-changed');if(c.dispatches.length>1) reasons.push('duplicate-dispatch-observed');
       const reset=c.originalExhaustedResetsAt,detected=c.detectedRecoveryAt??null,resume=c.resumeAt??null;
-      return {cycleFingerprint:c.id,threadFingerprint:this.fingerprint(c.threadId),failureTurnFingerprint:this.fingerprint(c.failureTurnId),nextTurnFingerprint:c.nextTurnId?this.fingerprint(c.nextTurnId):null,kind:c.kind,model:c.model,versions:c.versions,status,reasons,failureObservedAt:c.failureObservedAt,failureTurnStartedAt:c.failureTurnStartedAt??null,failureTurnEndedAt:c.failureTurnEndedAt??null,workingObservedAt:c.workingObservedAt,blockedQuotaObservedAt:c.blockedQuotaObservedAt,waitingRecordedAt:c.waitingRecordedAt??null,originalExhaustedResetsAt:reset,detectedRecoveryAt:detected,dispatchedAt:c.dispatches[0]?.sentAt??null,resumeAt:resume,autoResumedAt:c.autoResumedAt??null,nextTurnEndAt:c.nextTurnEndAt??null,goalCompletedAt:c.goalCompletedAt??null,dispatchCount:c.dispatches.length,duplicateDispatch:c.dispatches.length>1?'OBSERVED':c.dispatches.length===1&&c.nextTurnEndAt!=null?'NOT_OBSERVED':'UNKNOWN',receipt:c.receipt?'OBSERVED':'UNKNOWN',detectionLatencyMs:reset!=null&&detected!=null&&detected>=reset?detected-reset:null,resumeLatencyMs:reset!=null&&resume!=null&&resume>=reset?resume-reset:null,timingQuality:'Client wall-clock observations versus reported server reset (seconds precision); resume time is receipt time; poll/network/clock uncertainty applies'};
+      let episodeStatus=episodeReasons.length?'INCOMPLETE':'PASS';
+      if(c.manualOverride||c.uncertain||c.goalChanged||c.unrelatedTurnObserved||failedUnknown||c.dispatches.length&&!c.receipt) episodeStatus='UNKNOWN';
+      if(c.dispatches.length>1||failedOther||c.nextTurnStatus==='interrupted') episodeStatus='FAIL';
+      if(c.syntheticEvidence) episodeStatus='SIMULATED';
+      return {cycleFingerprint:c.id,threadFingerprint:this.fingerprint(c.threadId),failureTurnFingerprint:this.fingerprint(c.failureTurnId),nextTurnFingerprint:c.nextTurnId?this.fingerprint(c.nextTurnId):null,kind:c.kind,model:c.model,versions:c.versions,status,reasons,episode:{status:episodeStatus,outcome:turnOutcome,reasons:episodeReasons},goalOutcome:c.kind==='goal'?(c.goalChanged?'UNKNOWN':c.goalCompletedAt!=null?'COMPLETED':'PENDING'):null,successorCycleFingerprint:c.successorCycleFingerprint??null,nextTurnStatus:c.nextTurnStatus??null,nextTurnErrorCode:c.nextTurnErrorCode??null,nextTurnLifecycleObservedAt:c.nextTurnObservedAt??null,nextTurnStartedAt:c.nextTurnStartedAt??null,nextTurnCompletedAt:c.nextTurnCompletedAt??null,failureObservedAt:c.failureObservedAt,failureTurnStartedAt:c.failureTurnStartedAt??null,failureTurnEndedAt:c.failureTurnEndedAt??null,workingObservedAt:c.workingObservedAt,blockedQuotaObservedAt:c.blockedQuotaObservedAt,waitingRecordedAt:c.waitingRecordedAt??null,originalExhaustedResetsAt:reset,detectedRecoveryAt:detected,dispatchedAt:c.dispatches[0]?.sentAt??null,resumeAt:resume,autoResumedAt:c.autoResumedAt??null,nextTurnEndAt:c.nextTurnEndAt??null,goalCompletedAt:c.goalCompletedAt??null,dispatchCount:c.dispatches.length,duplicateDispatch:c.dispatches.length>1?'OBSERVED':c.dispatches.length===1&&c.nextTurnEndAt!=null?'NOT_OBSERVED':'UNKNOWN',receipt:c.receipt?'OBSERVED':'UNKNOWN',detectionLatencyMs:reset!=null&&detected!=null&&detected>=reset?detected-reset:null,resumeLatencyMs:reset!=null&&resume!=null&&resume>=reset?resume-reset:null,timingQuality:'Client wall-clock observations versus reported server reset (seconds precision); resume time is receipt time; poll/network/clock uncertainty applies'};
     });
     const overall=!cycles.length?'NOT_OBSERVED':cycles.every(c=>c.status==='SIMULATED')?'SIMULATED':['FAIL','UNKNOWN','INCOMPLETE','SIMULATED','PASS'].find(s=>cycles.some(c=>c.status===s));
     const json={schemaVersion:1,status:overall,generatedAt:this.now(),versions:versions(reportedVersions),commit:typeof commit==='string'&&/^[a-f0-9]{7,40}$/.test(commit)?commit:null,cycles};
-    const markdown=['# Natural quota cycle evidence',`Status: ${json.status}`,`Cycles: ${cycles.length}`,'',...cycles.flatMap(c=>[`## Cycle ${c.cycleFingerprint}`,`Status: ${c.status}`,`Kind: ${c.kind}; model: ${c.model??'Unavailable'}`,`Detected recovery: ${c.detectedRecoveryAt??'Not observed'}`,`Original exhausted reset: ${c.originalExhaustedResetsAt??'Unavailable'}`,`Resume: ${c.resumeAt??'Not observed'}`,`Dispatches: ${c.dispatchCount}; receipt: ${c.receipt}`,`Reasons: ${c.reasons.join(', ')||'Required evidence observed'}`,c.timingQuality,''])].join('\n');
+    const markdown=['# Natural quota cycle evidence',`Status: ${json.status}`,`Cycles: ${cycles.length}`,'',...cycles.flatMap(c=>[`## Cycle ${c.cycleFingerprint}`,`Status: ${c.status}`,`Recovery episode: ${c.episode.status}; outcome: ${c.episode.outcome}`,`Overall Goal: ${c.goalOutcome??'Not a Goal'}`,`Kind: ${c.kind}; model: ${c.model??'Unavailable'}`,`Detected recovery: ${c.detectedRecoveryAt??'Not observed'}`,`Original exhausted reset: ${c.originalExhaustedResetsAt??'Unavailable'}`,`Resume: ${c.resumeAt??'Not observed'}`,`Dispatches: ${c.dispatchCount}; receipt: ${c.receipt}`,`Reasons: ${c.reasons.join(', ')||'Required evidence observed'}`,c.timingQuality,''])].join('\n');
     return {json,markdown};
   }
 }

@@ -64,3 +64,31 @@ test('an unknown-source ready reading cannot replace the first real recovery pol
   const {recorder}=fixture(t);begin(recorder,{src:'official-app-server'});recorder.onQuota(raw(0,0,500),131000,'unknown');assert.equal(recorder.report().json.cycles[0].detectedRecoveryAt,null);
   recorder.onQuota(raw(0,0,600),132000,'official-app-server');assert.equal(recorder.report().json.cycles[0].detectedRecoveryAt,132000);
 });
+test('canonical target history links repeated same-Goal quota cycles without unrelated or duplicate attribution',t=>{
+  const {recorder}=fixture(t),goal={status:'active',objective:'SECRET GOAL'};begin(recorder,{goal:true});recorder.onQuota(raw(0,0,500),132000,source);dispatch(recorder);
+  recorder.onThread({threadId,snapshot:snapshot('inProgress',next,goal),decision:{action:'running'},observedAt:135000,source});
+  recorder.onQuota(raw(100,100,160),139000,source);
+  recorder.onThread({threadId,snapshot:snapshot('failed',next,{...goal,status:'usageLimited'}),decision:{action:'quotaFailure'},record:{phase:'waitingQuota'},observedAt:140000,source});
+  recorder.onQuota(raw(0,0,500),171000,source);const successor='successor-private';const intent={failureTurnId:next,messageId:'second-dispatch',sentAt:172000,phase:'sent',confirmedTurnId:successor};
+  recorder.onEngineEvent('continuation-accepted',{threadId,turnId:successor,intent,observedAt:173000,source});recorder.onEngineEvent('auto-resumed',{threadId,intent,observedAt:174000,source});
+  const canonical={id:threadId,latestModel:'gpt-6.1-sol',threadGoal:goal,turnHistory:{kind:'canonical',history:{entitiesByKey:{prior:{turnId:next,status:'failed',turnStartedAtMs:132000,error:{codexErrorInfo:'usageLimitExceeded'}},current:{turnId:successor,status:'inProgress',turnStartedAtMs:172000}},islands:[{entries:[{value:'prior'},{value:'current'}],newerBoundary:{status:'exhausted'}}]}}};
+  recorder.onThread({threadId,snapshot:canonical,decision:{action:'running'},intent,observedAt:180000,source});const cycles=recorder.report().json.cycles;
+  assert.equal(cycles.length,2);assert.equal(cycles[0].episode.outcome,'CONTINUED_THEN_QUOTA_LIMITED');assert.equal(cycles[0].successorCycleFingerprint,cycles[1].cycleFingerprint);assert.equal(cycles[0].nextTurnEndAt,140000);assert.equal(cycles[0].autoResumedAt,134000);assert.equal(cycles[1].episode.outcome,'CONTINUING');
+  for(const c of cycles){assert.equal(c.dispatchCount,1);assert.equal(c.status,'SIMULATED');assert.equal(c.goalOutcome,'PENDING');assert.ok(!c.reasons.includes('unrelated-next-turn-observed'));assert.ok(!c.reasons.includes('duplicate-dispatch-observed'));}
+});
+test('a later tail with absent target history cannot invent the missing lifecycle or error classification',t=>{
+  const {recorder}=fixture(t);begin(recorder,{goal:true,src:'official-app-server'});recorder.onQuota(raw(0,0,500),132000,'official-app-server');dispatch(recorder,'official-app-server');
+  recorder.onThread({threadId,snapshot:snapshot('inProgress','some-later-turn',{status:'active',objective:'SECRET GOAL'}),decision:{action:'running'},observedAt:150000,source:'desktop-ipc'});
+  let c=recorder.report().json.cycles[0];assert.equal(c.status,'INCOMPLETE');assert.equal(c.nextTurnEndAt,null);assert.equal(c.episode.outcome,'UNOBSERVED');assert.ok(!c.reasons.includes('unrelated-next-turn-observed'));
+  const stored=recorder.cycles(threadId)[0];stored.nextTurnStatus='failed';stored.nextTurnEndAt=140000;stored.endReal=true;recorder.save();c=recorder.report().json.cycles[0];assert.equal(c.status,'UNKNOWN');assert.equal(c.episode.outcome,'FAILED_ERROR_UNAVAILABLE');assert.ok(c.reasons.includes('failed-next-turn-error-classification-unavailable'));
+});
+test('historical auto-resume receipt timestamp survives later event observations',t=>{
+  const {recorder}=fixture(t);begin(recorder);recorder.onQuota(raw(0,0,500),132000,source);dispatch(recorder);
+  recorder.onEngineEvent('auto-resumed',{threadId,observedAt:190000,source});recorder.onEngineEvent('continuation-accepted',{threadId,turnId:next,observedAt:191000,source});
+  const c=recorder.report().json.cycles[0];assert.equal(c.autoResumedAt,134000);assert.equal(c.resumeAt,133000);
+});
+test('an immediately quota-failed resume without a running observation cannot claim continued work',t=>{
+  const {recorder}=fixture(t);begin(recorder,{goal:true});recorder.onQuota(raw(0,0,500),132000,source);dispatch(recorder);
+  recorder.onThread({threadId,snapshot:snapshot('failed',next,{status:'usageLimited',objective:'SECRET GOAL'}),observedAt:135000,source});
+  const c=recorder.report().json.cycles[0];assert.equal(c.episode.outcome,'RESUME_ATTEMPT_QUOTA_LIMITED');assert.ok(c.episode.reasons.includes('continued-work-lifecycle-not-observed'));assert.equal(c.status,'SIMULATED');
+});
