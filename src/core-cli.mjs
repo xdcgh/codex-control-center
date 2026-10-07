@@ -1,3 +1,4 @@
+import { configureNetwork } from './core/network.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -15,6 +16,7 @@ import { NaturalCycleRecorder } from './observability/natural-cycle.mjs';
 import { backfillAutomaticRecoveryEvents } from './core/natural-backfill.mjs';
 import { recoverOffline } from './core/offline-recovery.mjs';
 
+configureNetwork();
 const args = process.argv.slice(2), command = args[0] ?? 'doctor';
 const argument = key => { const i = args.indexOf(key); return i < 0 ? null : args[i+1]; };
 const output = value => process.stdout.write(JSON.stringify(value)+'\n');

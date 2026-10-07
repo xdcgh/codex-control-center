@@ -44,6 +44,7 @@ export class SqliteStore {
       this.db=new DatabaseSync(file);this.db.exec('PRAGMA busy_timeout=3000;');
       const version=this.db.prepare('PRAGMA user_version').get().user_version;
       if(version>SCHEMA_VERSION) throw new Error('database-schema-newer-than-app');
+      if(version===0&&this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1").get())throw new Error('database-unversioned-schema-unrecognized');
       verify(this.db,{records:version>=1});
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
       if(version>0&&version<SCHEMA_VERSION&&file!==':memory:'&&backupBeforeMigration) {

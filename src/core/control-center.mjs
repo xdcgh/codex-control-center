@@ -190,7 +190,7 @@ export class ControlCenterCore {
       if(!await this.adapter.isEligible(record.threadId)){this.engine.transition(record,'inactive','archived-or-no-longer-root');delete record.failureTurnId;this.engine.save();return false;}
       this.adapter.verifyWriteSafety();
       const ok = await this.engine.recover(record.threadId);
-      if (ok) { if(!this.manualResumes.has(record.threadId))policy.retryCount++;policy.nextAttemptAt = 0; this.store.event('auto-resumed',{ threadId:record.threadId });this.recorder?.onEngineEvent('auto-resumed',{threadId:record.threadId,intent:this.engine.state.ledger[record.attemptKey],observedAt:this.now(),source:this.adapter.source}); }
+      if (ok) { if(!this.manualResumes.has(record.threadId))policy.retryCount++;policy.nextAttemptAt = 0; this.store.event('auto-resumed',{ threadId:record.threadId,manual:this.manualResumes.has(record.threadId) });this.recorder?.onEngineEvent('auto-resumed',{threadId:record.threadId,intent:this.engine.state.ledger[record.attemptKey],observedAt:this.now(),source:this.adapter.source}); }
       else if (record.phase === 'needsAttention') { policy.retryCount++; policy.autoResume = false; this.store.event('resume-needs-attention',{ threadId:record.threadId, reason:record.reason }); }
       else if (record.phase === 'waitingQuota' && record.reason === 'desktop-state-changed-before-send') { policy.retryCount++; policy.nextAttemptAt = this.now()+policy.cooldownSeconds*1000; }
       if (!ok&&policy.retryCount >= policy.maxRetries) { policy.autoResume = false; this.engine.transition(record,'needsAttention','retry-limit-reached'); }

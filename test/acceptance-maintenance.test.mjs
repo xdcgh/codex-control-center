@@ -5,9 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { ObservabilityClient } from '../src/core/observability-client.mjs';
+import { recoverOffline } from '../src/core/offline-recovery.mjs';
 import { ControlCenterCore } from '../src/core/control-center.mjs';
 import { createRouter } from '../src/core/router.mjs';
 import { SqliteStore } from '../src/persistence/sqlite.mjs';
+import { acquireLock } from '../src/store.mjs';
 
 const DAY = 86400000, HOUR = 3600000;
 function temp(t) {
@@ -172,6 +174,51 @@ test('unknown schema and corrupted files fail closed without replacement; confir
     assert.ok(Number.isFinite(restored.getSetting('database-recovery').reviewedAt));
     assert.equal(restored.getSetting('core-settings').autoResume, false);
   } finally { restored.close(); }
+});
+
+test('offline recovery requires confirmation, owns an exclusive synthetic maintenance lease, rejects a live database owner, then preserves and restores only its isolated profile', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-offline-recovery-acceptance-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const stateDirectory = path.join(directory, 'synthetic-state'), ownerDirectory = path.join(directory, 'synthetic-owner');
+  fs.mkdirSync(stateDirectory, { recursive: true }); fs.mkdirSync(ownerDirectory, { recursive: true });
+  const file = path.join(stateDirectory, 'control-center.sqlite'), backupFile = path.join(directory, 'known-good.sqlite');
+  const seed = new SqliteStore(file);
+  seed.setSetting('core-settings', { autoResume: true, recoveryPollSeconds: 10 });
+  seed.save({ schemaVersion: 1, startedAt: 'synthetic', records: { SYNTH_OFFLINE_THREAD: { threadId: 'SYNTH_OFFLINE_THREAD', phase: 'waitingQuota' } }, ledger: { SYNTH_OFFLINE_INTENT: { threadId: 'SYNTH_OFFLINE_THREAD', phase: 'uncertain' } } });
+  seed.backup(backupFile); seed.close();
+  const originalDatabase = fs.readFileSync(file);
+  const config = { stateDirectory };
+
+  assert.throws(() => recoverOffline({ config, backupFile, ownerDirectory }), /database-recovery-confirmation-required/);
+  assert.equal(fs.existsSync(path.join(ownerDirectory, 'daemon.lock')), false);
+
+  const releaseOtherOwner = acquireLock(ownerDirectory);
+  const foreignLease = fs.readFileSync(path.join(ownerDirectory, 'daemon.lock'));
+  assert.throws(() => recoverOffline({ config, backupFile, confirmed: true, ownerDirectory }), /watchdog-already-running/);
+  assert.deepEqual(fs.readFileSync(path.join(ownerDirectory, 'daemon.lock')), foreignLease);
+  releaseOtherOwner();
+
+  const databaseOwner = path.join(stateDirectory, 'daemon.lock');
+  const liveLease = Buffer.from(JSON.stringify({ pid: process.pid, token: 'SYNTH_LIVE_OWNER', startedAt: new Date().toISOString() }));
+  fs.writeFileSync(databaseOwner, liveLease);
+  assert.throws(() => recoverOffline({ config, backupFile, confirmed: true, ownerDirectory }), /database-recovery-live-owner/);
+  assert.deepEqual(fs.readFileSync(databaseOwner), liveLease);
+  assert.equal(fs.existsSync(path.join(ownerDirectory, 'daemon.lock')), false);
+  fs.rmSync(databaseOwner);
+
+  const restored = recoverOffline({ config, backupFile, confirmed: true, ownerDirectory });
+  assert.equal(restored.restored, true);
+  assert.equal(restored.originalPreserved, true);
+  assert.equal(restored.requiresReview, true);
+  assert.equal(path.dirname(restored.preservedDirectory), stateDirectory);
+  assert.deepEqual(fs.readFileSync(path.join(restored.preservedDirectory, path.basename(file))), originalDatabase);
+  assert.equal(fs.existsSync(path.join(ownerDirectory, 'daemon.lock')), false);
+  const recovered = new SqliteStore(file);
+  try {
+    assert.equal(recovered.getSetting('core-settings').autoResume, false);
+    assert.equal(recovered.getSetting('database-recovery').requiresReview, true);
+    assert.equal(recovered.load().ledger.SYNTH_OFFLINE_INTENT.phase, 'uncertain');
+  } finally { recovered.close(); }
 });
 
 test('Core recovery-review fence blocks automatic enablement and manual Resume until explicit review acknowledgement', async t => {

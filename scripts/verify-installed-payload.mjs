@@ -56,6 +56,24 @@ function normalizedExecutable(file, from, to) {
   return { ok: true, sourceCount, targetCount, sha256: createHash('sha256').update(bytes).digest('hex') };
 }
 function parseJson(file) { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+const privatePathPatterns = [
+  /[A-Z]:\\Users\\[^\\\x00]{1,120}\\[^\\\x00]{1,240}/gi,
+  /[A-Z]:\\Documents and Settings\\[^\\\x00]{1,120}\\[^\\\x00]{1,240}/gi,
+  /[A-Z]:\\(?:[^\\\x00]{1,120}\\){1,8}AppData\\[^\\\x00]{1,240}/gi,
+];
+function privateAbsolutePathOccurrences(bytes) {
+  const texts = [bytes.toString('latin1'), bytes.toString('utf16le')]; let count = 0;
+  for (const text of texts) for (const pattern of privatePathPatterns) {
+    pattern.lastIndex = 0;
+    while (pattern.exec(text)) count++;
+  }
+  return count;
+}
+function verifyPathScanner() {
+  const sep = String.fromCharCode(92), sample = ['Z:', 'Users', 'fixture-profile', 'AppData', 'Local', 'build-cache'].join(sep);
+  if (!privateAbsolutePathOccurrences(Buffer.from(sample, 'ascii')) || !privateAbsolutePathOccurrences(Buffer.from(sample, 'utf16le'))) throw new Error('private-path-scanner-self-test-failed');
+}
+verifyPathScanner();
 
 const a = inventory(roots.installed), b = inventory(roots.portable), failures = [...a.failures, ...b.failures];
 const portableMetadata = new Set(['.control-center-run-artifact', 'manifest.json', 'run-manifest.json', 'readme', 'readme.md', 'readme.txt']);
@@ -93,10 +111,10 @@ for (const [key, itemA] of payloadA) {
   else exactMatches.push(itemA.relative);
 }
 
-const required = ['node.exe', 'node-license', 'license', 'third_party_licenses.txt', 'third_party_notices.md', 'core/pricing.json', 'core/src/core-cli.mjs'];
+const required = ['node.exe', 'node-license', 'license', 'third_party_licenses.txt', 'third_party_notices.md', 'core/pricing.json', 'core/src/core-cli.mjs', 'core/scripts/read-systemproxy.ps1'];
 for (const key of required) if (!payloadA.has(key) || !payloadB.has(key)) failures.push(`required-payload-missing:${key}`);
 const powershellScripts = [...payloadA.keys()].filter(key => key.startsWith('core/scripts/') && key.endsWith('.ps1')).length;
-if (powershellScripts !== 4) failures.push(`unexpected-powershell-script-count:${powershellScripts}`);
+if (powershellScripts !== 5) failures.push(`unexpected-powershell-script-count:${powershellScripts}`);
 
 const nodeManifest = b.files.get('manifest.json');
 const runManifest = b.files.get('run-manifest.json');
@@ -109,14 +127,22 @@ try {
 if (!manifestOk) failures.push('runtime-manifest-mismatch');
 
 const privateNamePattern = /(^|\/)(?:config\.json|owner\.json|daemon\.lock|state\.json|[^/]+\.(?:db|sqlite|sqlite3|jsonl|log)(?:-(?:wal|shm))?|auth(?:\.json)?|credentials?(?:\.json)?|\.codex|sessions|diagnostics|logs|users|appdata)(\/|$)/i;
-const privateNameMatches = [...new Set([...a.files.values(), ...b.files.values()].filter(item => privateNamePattern.test(item.relative)).map(item => item.relative.toLowerCase()))];
-if (privateNameMatches.length) failures.push(...privateNameMatches.map(name => `sensitive-path:${name}`));
+const allFiles = [...a.files.values(), ...b.files.values()];
+const privateNameMatches = [...new Set(allFiles.filter(item => privateNamePattern.test(item.relative)).map(item => item.relative.toLowerCase()))];
+let privateAbsolutePathLeakFiles = 0, privateAbsolutePathLeakOccurrences = 0;
+for (const item of allFiles) {
+  const count = privateAbsolutePathOccurrences(fs.readFileSync(item.full));
+  if (count) { privateAbsolutePathLeakFiles++; privateAbsolutePathLeakOccurrences += count; }
+}
+if (privateNameMatches.length) failures.push(`sensitive-payload-names:${privateNameMatches.length}`);
+if (privateAbsolutePathLeakOccurrences) failures.push(`private-absolute-path-content:${privateAbsolutePathLeakOccurrences}`);
 
 const result = { status: failures.length ? 'FAIL' : 'PASS', installedPayloadFiles: payloadA.size, portablePayloadFiles: payloadB.size,
   exactNonMainFiles: exactMatches.length, mainExeMarkerOnlyDifference: executable.normalizedMatch,
   mainExe: executable, nodeVersion: OFFICIAL_NODE_VERSION, nodeSha256, nodeMatchesOfficialDigest: nodeSha256 === OFFICIAL_NODE_SHA256, manifestMatches: manifestOk,
   licenseFilesPresent: ['LICENSE', 'node-LICENSE', 'THIRD_PARTY_LICENSES.txt', 'THIRD_PARTY_NOTICES.md'].every(name => payloadA.has(name.toLowerCase()) && payloadB.has(name.toLowerCase())),
   corePowerShellScriptCount: powershellScripts, suspiciousPathMatches: privateNameMatches.length,
+  privateAbsolutePathLeakFiles, privateAbsolutePathLeakOccurrences, scannerSelfTest: true,
   failures };
 process.stdout.write(JSON.stringify(result) + '\n');
 if (failures.length) process.exitCode = 1;

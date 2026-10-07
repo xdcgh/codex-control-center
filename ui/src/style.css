@@ -827,3 +827,5 @@ td small {
     flex-direction: column;
   }
 }
+
+.policy-editor{width:100%;min-height:300px;font-family:monospace;}

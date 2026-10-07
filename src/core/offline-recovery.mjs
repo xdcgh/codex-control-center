@@ -1,7 +1,8 @@
 import fs from 'node:fs';import path from 'node:path';
 import { acquireLock,readJson } from '../store.mjs';import { resolveOwnerAnchor,inspectOwnerLease } from './ownership.mjs';import { SqliteStore } from '../persistence/sqlite.mjs';
-export function recoverOffline({config,backupFile,confirmed=false,ownerDirectory=resolveOwnerAnchor({create:true})}){
+export function recoverOffline({config,backupFile,confirmed=false,ownerDirectory}){
  if(!confirmed)throw new Error('database-recovery-confirmation-required');
+ ownerDirectory??=resolveOwnerAnchor({create:true});
  const file=path.resolve(config.stateDirectory,'control-center.sqlite'),release=acquireLock(ownerDirectory,{isOwnerAlive:owner=>inspectOwnerLease({directory:ownerDirectory,owner}).alive});
  try{
   const verifyOffline=target=>{

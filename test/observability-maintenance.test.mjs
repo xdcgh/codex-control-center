@@ -24,6 +24,9 @@ test('corruption and newer schema fail closed; explicit restore preserves the or
 test('malformed recovery ledger JSON is not silently rebuilt',t=>{
   const {file}=fixture(t);const s=new SqliteStore(file);s.db.prepare('INSERT INTO recovery_intents VALUES(?,?)').run('incident','{broken');s.close();assert.throws(()=>new SqliteStore(file),/database-record-corrupt/);
 });
+test('an unversioned populated SQLite file is not silently treated as a fresh empty recovery ledger',t=>{
+  const {file}=fixture(t);const db=new DatabaseSync(file);db.exec('CREATE TABLE legacy_state(value TEXT); INSERT INTO legacy_state VALUES(\'fixture\');');db.close();const original=hash(file);assert.throws(()=>new SqliteStore(file),/unversioned-schema/);assert.equal(hash(file),original);
+});
 test('compaction preserves timestamp first/last and extrema separately for reset segments despite unordered inserts',t=>{
   const s=new SqliteStore(':memory:');t.after(()=>s.close());for(const [time,p] of [[400,30],[100,50],[300,90],[200,10],[350,40]])sample(s,time,p,999);for(const [time,p] of [[450,0],[470,20],[460,10]])sample(s,time,p,1999);
   s.compactHistory({before:1000,bucketMs:1000});const values=s.queryQuotaHistory();assert.deepEqual(values.filter(r=>r.reset_at===999000).map(r=>r.timestamp),[100,200,300,400]);assert.equal(values.filter(r=>r.reset_at===1999000).length,2);

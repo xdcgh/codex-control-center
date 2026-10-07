@@ -11,7 +11,8 @@ Updated 2026-10-08. This record covers source publication; it is separate from p
 | Fixtures and smoke helpers | PASS for initial import | Synthetic fixture IDs; live IDs are runtime-only values. Smoke receipts are outside tracked source |
 | Runtime, auth, diagnostics and databases | Excluded | Git ignore rules plus explicit tracked-file review; no application runtime imported |
 | Reference licenses | Reviewed | Eleven pinned repositories; unlicensed-at-pin code remains reference-only; no community implementation copied |
-| Dependency/package inventory | PASS for current lockfiles and staged payload | Actual npm/Cargo/Node license texts bundled; MPL source availability recorded; new NSIS install compared directly with portable |
+| Dependency/license inventory | PASS for current lockfiles | Actual npm/Cargo/Node license texts bundled; MPL source availability recorded |
+| Binary/publication paths | Rebuild and final scan required | Stronger byte scanning found private compiler-cache locations in the old staged native executable. Those artifacts remain private and are rejected for release. Compiler source-path mapping and PDB normalization must produce a clean rebuilt payload. |
 | Screenshots | Private reviewed probes; public set pending | Live dashboard privacy mode inspected; public final-build screenshots still require selection and visual review |
 
 Gitleaks archives were downloaded from the official project release and verified against its published SHA256 list before execution. Raw scan reports are kept privately outside this repository. A zero result is evidence of this scan, not a guarantee that arbitrary future commits are safe.

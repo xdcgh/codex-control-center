@@ -1,6 +1,8 @@
+import { configureNetwork } from './network.mjs';
 import { parentPort,workerData } from 'node:worker_threads';
 import { SqliteStore } from '../persistence/sqlite.mjs';
 import { ObservabilityService } from '../observability/index.mjs';
+configureNetwork();
 const store=new SqliteStore(workerData.database),service=new ObservabilityService({store,codexHome:workerData.codexHome});
 let lastError=null;
 const poll=()=>{try{service.poll();lastError=null;}catch{lastError='session-observation-unavailable';}};

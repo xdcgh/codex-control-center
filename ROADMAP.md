@@ -6,8 +6,8 @@ An item is checked only when its deliverable and associated evidence exist. Simu
 - [x] Phase 1: current community/protocol/framework research, licenses, telemetry semantics, stack ADR.
 - [x] Phase 2: adapters, live quota polling (10 seconds), independent history sampling (60 seconds), durable scheduling, SQLite, compatibility and doctor; headless suite and live read-only probes passed.
 - [x] Phase 3: Windows dashboard, threads, quota, tray presence, settings, diagnostics; installed application reused the authenticated Core. Actual tray menu interaction remains Phase 7 acceptance.
-- [ ] Phase 4: quota charts, token/model/tier/effort analytics, context-aware versioned API-equivalent pricing.
-- [ ] Phase 5: performance telemetry with exact, estimated, and unavailable distinctions.
+- [x] Phase 4: quota charts, token/model/tier/effort analytics, context-aware versioned API-equivalent pricing; independent source/ledger/statistics acceptance passed. Global inherited/fork consumption remains explicitly unavailable.
+- [x] Phase 5: observed turn performance distributions by model/tier; exact model TTFT/decode/model-waiting timings are protocol-unavailable and clearly labeled.
 - [x] Phase 6: priority, reserve, concurrency, retries, resume queue and manual controls; independent race/restart/fail-safe acceptance passed.
 - [ ] Phase 7: desktop widget, expanded tray controls, deduplicated notifications, privacy mode.
 - [ ] Phase 8: restart/offline/crash/unknown-version/corruption/manual-control/multiple-thread reliability.

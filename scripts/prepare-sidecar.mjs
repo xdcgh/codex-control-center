@@ -19,7 +19,7 @@ else if(!fs.existsSync(path.join(output,'node-LICENSE'))) {
 fs.cpSync(path.join(root,'src'),path.join(output,'core','src'),{recursive:true});
 fs.copyFileSync(path.join(root,'pricing.json'),path.join(output,'core','pricing.json'));
 fs.mkdirSync(path.join(output,'core','scripts'),{recursive:true});
-for(const name of ['Get-DesktopOwner.ps1','Check-OwnerAnchor.ps1','Inspect-OwnerLease.ps1','Control-Autostart.ps1','discover-config.mjs'])fs.copyFileSync(path.join(root,'scripts',name),path.join(output,'core','scripts',name));
+for(const name of ['Get-DesktopOwner.ps1','Check-OwnerAnchor.ps1','Inspect-OwnerLease.ps1','Control-Autostart.ps1','Read-SystemProxy.ps1','discover-config.mjs'])fs.copyFileSync(path.join(root,'scripts',name),path.join(output,'core','scripts',name));
 fs.writeFileSync(path.join(output,'core','package.json'),JSON.stringify({type:'module',name:'codex-control-center-sidecar',version:'0.1.0'}));
 const sha=createHash('sha256').update(fs.readFileSync(path.join(output,'node.exe'))).digest('hex');
 const checksumFile=path.join(output,'node-SHASUMS256.txt');let checksumText;

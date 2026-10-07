@@ -75,6 +75,8 @@ jobs:
           if ($taskInstallerProcess.ExitCode -ne 0) { throw 'Fresh NSIS installation failed' }
           node scripts/verify-installed-payload.mjs --installed $taskInstalledDirectory --portable $taskPortableDirectory
           if ($LASTEXITCODE -ne 0) { throw 'Installed payload verification failed' }
+          npm run publication:check -- $taskInstalledDirectory $taskPortableDirectory
+          if ($LASTEXITCODE -ne 0) { throw 'Distribution contains private absolute paths' }
           Compress-Archive -LiteralPath (Get-ChildItem -LiteralPath $taskPortableDirectory | Select-Object -ExpandProperty FullName) -DestinationPath (Join-Path $taskReleaseDirectory 'codex-control-center-windows-x64-portable.zip')
           Get-ChildItem -LiteralPath 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' | Copy-Item -Destination $taskReleaseDirectory
           $taskHashLines = Get-ChildItem -LiteralPath $taskReleaseDirectory -File | ForEach-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.Name }

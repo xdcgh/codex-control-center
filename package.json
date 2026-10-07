@@ -19,7 +19,8 @@
     "ui:build": "tsc -p ui/tsconfig.json && vite build",
     "prepare:sidecar": "node scripts/prepare-sidecar.mjs",
     "desktop:dev": "tauri dev",
-    "desktop:build": "tauri build"
+    "desktop:build": "node scripts/build-desktop.mjs",
+    "publication:check": "node scripts/check-publication-paths.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.1",

@@ -88,6 +88,7 @@ async fn ensure_owner(app:&tauri::AppHandle)->Result<(),String>{
     let mut node=resources.join("node.exe");let mut source=resources.join("core/src/core-cli.mjs");
     #[cfg(debug_assertions)] {if !node.is_file(){node=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.packaged/node.exe");source=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/core-cli.mjs");}}
     let mut command=std::process::Command::new(node);
+    if std::env::var_os("NODE_USE_ENV_PROXY").is_none(){command.env("NODE_USE_ENV_PROXY","1");}
     command.env("CODEX_CONTROL_CENTER_BROKER_HELPER",std::env::current_exe().map_err(|_|"broker-helper-unavailable")?);
     command.arg("--disable-warning=ExperimentalWarning").arg(source).arg("run").arg("--config").arg(&service.config);
     if config["ownerHandoverAcknowledged"]==true || config["installationMode"]=="fresh" {command.arg("--execute");}
@@ -140,6 +141,21 @@ fn save_diagnostics(app:tauri::AppHandle,value:Value)->Result<String,String>{
  let service=app.try_state::<Service>().ok_or("app-starting")?;let destination=service.preferences_file.parent().ok_or("diagnostics-directory-missing")?.join("diagnostics-redacted.json");
  fs::write(&destination,serde_json::to_vec_pretty(&value).map_err(|_|"diagnostics-invalid")?).map_err(|_|"diagnostics-save-failed")?;
  Ok(destination.to_string_lossy().into_owned())
+}
+#[tauri::command]
+async fn restart_background(app:tauri::AppHandle)->Result<(),String>{ensure_owner(&app).await}
+#[tauri::command]
+async fn recover_database(app:tauri::AppHandle,backup_file:String,confirmed:bool)->Result<Value,String>{
+ if !confirmed{return Err("database-recovery-confirmation-required".into());}
+ let service=app.try_state::<Service>().ok_or("app-starting")?;
+ let config_path=service.config.clone();let(node,source)=core_assets(&app)?;
+ tauri::async_runtime::spawn_blocking(move||{
+   let mut command=std::process::Command::new(node);command.arg("--disable-warning=ExperimentalWarning").arg(source.join("core-cli.mjs")).arg("database-recover").arg("--config").arg(config_path).arg("--backup").arg(backup_file).arg("--confirm");
+   #[cfg(windows)]{use std::os::windows::process::CommandExt;command.creation_flags(0x08000000);}
+   let output=command.stderr(std::process::Stdio::null()).output().map_err(|_|"database-recovery-command-failed")?;
+   let value:Value=serde_json::from_slice(&output.stdout).map_err(|_|"database-recovery-response-invalid")?;
+   if !output.status.success(){return Err(value["error"].as_str().unwrap_or("database-recovery-failed").to_string());}Ok(value)
+ }).await.map_err(|_|"database-recovery-worker-failed".to_string())?
 }
 
 fn show(app:&tauri::AppHandle,label:&str,page:Option<&str>){if let Some(window)=app.get_webview_window(label){let _=window.show();let _=window.set_focus();if let Some(page)=page{let _=window.emit("navigate",page);}}}
@@ -208,7 +224,7 @@ fn main(){
  .plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build())
  .plugin(tauri_plugin_notification::init())
  .plugin(tauri_plugin_window_state::Builder::default().build())
- .invoke_handler(tauri::generate_handler![core_request,ui_preferences,show_window,set_autostart,get_autostart,save_diagnostics])
+ .invoke_handler(tauri::generate_handler![core_request,ui_preferences,show_window,set_autostart,get_autostart,save_diagnostics,restart_background,recover_database])
  .on_window_event(|window,event|{if let tauri::WindowEvent::CloseRequested{api,..}=event{api.prevent_close();let _=window.hide();}})
  .setup(|app|{
     let handle=app.handle().clone();let discovery=discover_config(&handle);let startup_error=discovery.as_ref().err().cloned();let config=discovery.unwrap_or_default();

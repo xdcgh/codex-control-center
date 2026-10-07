@@ -1,3 +1,6 @@
+import { RuntimeDiagnostics } from "./RuntimeDiagnostics";
+import { DatabaseRecovery } from "./DatabaseRecovery";
+import { StatisticsComparison, PerformanceComparison } from "./StatisticsComparison";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
@@ -90,6 +93,8 @@ type Sample = {
   used_percent: number;
   remaining_percent: number;
   reset_at: number | null;
+  pointKind?: string;
+  sourceCountQuality?: string;
 };
 const request = <T,>(method: string, params: unknown = {}): Promise<T> =>
   invoke("core_request", { method, params });
@@ -808,7 +813,7 @@ function QuotaHistory({ now }: { now: number }) {
   }
   const hourly = span > 0 ? (burn / span) * 3600000 : null,
     latest = series.at(-1);
-  const metrics=quotaMetrics(samples,duration,now);
+  const metrics=quotaMetrics(samples.filter(s=>s.pointKind!=="daily-mean"),duration,now);
   const resetMarkers = [300, 10080].flatMap((window) => {
     const rows = samples.filter((s) => s.window === window);
     return rows.filter(
@@ -825,7 +830,7 @@ function QuotaHistory({ now }: { now: number }) {
           <div>
             <h2>Quota history</h2>
             <p className="caption">
-              Real local samples · 1-minute default cadence
+              Real local samples · 1-minute default cadence; older retained points are daily means
             </p>
           </div>
           <div className="tabs">
@@ -847,6 +852,7 @@ function QuotaHistory({ now }: { now: number }) {
           </div>
         </div>
         {error && <p className="error">{error}</p>}
+        {samples.some(s=>s.pointKind==="daily-mean")&&<p className="banner">Partial historical precision: daily means summarize whole retained days, including days partially outside this range. They are not exact observations or current-speed inputs.</p>}
         {samples.length ? (
           <>
             <svg
@@ -879,6 +885,7 @@ function QuotaHistory({ now }: { now: number }) {
                   className="reset-marker"
                 />
               ))}
+              {samples.filter(s=>s.pointKind==="daily-mean").map(s=><circle key={`mean:${s.window}:${s.timestamp}`} cx={50+((s.timestamp-start)/(range*3600000))*900} cy={250-s.remaining_percent*2} r="4" fill="none" stroke="currentColor"><title>Daily mean · {s.sourceCountQuality??"aggregate precision"}</title></circle>)}
               <polyline points={points(300)} className="series five" />
               <polyline points={points(10080)} className="series week" />
               <text x="50" y="290">
@@ -1162,6 +1169,8 @@ function Diagnostics({
     [saved, setSaved] = useState<string | null>(null);
   return (
     <>
+      <DatabaseRecovery request={request} />
+      <RuntimeDiagnostics request={request}/>
       <section className="panel">
         <div className="panel-heading">
           <div>
@@ -1270,6 +1279,7 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
         Estimated API-equivalent cost uses public API pricing. It is not the
         amount charged by the Codex subscription.
       </div>
+      <StatisticsComparison groups={data?.groups??[]} privacy={privacy} groupBy={groupBy}/>
       <section className="panel">
         <div className="panel-heading">
           <h2>Token usage</h2>
@@ -1278,6 +1288,7 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
               "model",
               "tier",
               "effort",
+              "collaboration",
               "turn",
               "thread",
               "goal",
@@ -1423,6 +1434,7 @@ function Performance() {
           note="Overlapping tool intervals counted once"
         />
       </div>
+      <PerformanceComparison data={data}/>
       <section className="panel">
         <h2>Observed performance distribution</h2>
         {error && <p className="error">{error}</p>}

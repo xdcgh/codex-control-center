@@ -68,15 +68,25 @@ export class PricingPolicy {
     const partial=event.scope==='latest-sample'||event.tierEvidence==='observed-turn-settings';
     return { status: partial ? 'Partial' : 'Estimated', reason: event.scope === 'latest-sample' ? 'latest-sample-only-coverage' : event.tierEvidence==='observed-turn-settings'?'configured-turn-tier-not-response-confirmed':null, usd: (input*rates.input+cached*rates.cached+write*rates.write+u.output_tokens*rates.output)/1e6, snapshotId: policy.id, context: long ? 'long' : 'short', label: 'API-equivalent estimate; not a subscription bill' };
   }
-  async checkOfficialUpdate({ fetchImpl = fetch, source = 'https://developers.openai.com/api/docs/pricing.md' } = {}) {
+  async checkOfficialUpdate({ fetchImpl = fetch, source = 'https://developers.openai.com/api/docs/pricing.md',timeoutMs=15000 } = {}) {
     const url = new URL(source);
-    if (url.protocol !== 'https:' || !['developers.openai.com','platform.openai.com'].includes(url.hostname)) throw new Error('official-source-required');
-    const response = await fetchImpl(url, { redirect: 'error' });
-    if (!response.ok) throw new Error('pricing-source-fetch-failed');
-    const body = await response.text();
-    if (body.length > 2000000) throw new Error('pricing-source-too-large');
-    const hash = digest(body), key = `observability:pricing-source:${url.href}`, old = this.store?.getSetting(key);
-    this.store?.setSetting(key, hash);
-    return { source: url.href, digest: hash, changed: old != null && old !== hash, baseline: old == null, requiresManualConfirmation: true, pricesModified: false };
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.search || url.port || !['developers.openai.com','platform.openai.com'].includes(url.hostname)) throw new Error('official-source-required');
+    if(!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>15000)throw new Error('invalid-pricing-check-timeout');
+    const base={source:url.href,changed:false,requiresManualConfirmation:true,pricesModified:false,manualFallback:'Open the official source, verify rates, then explicitly confirm a new pricing snapshot'};
+    let timer;
+    const controller=new AbortController();
+    const timeout=new Promise(resolve=>{timer=setTimeout(()=>{controller.abort();resolve({...base,status:'Unavailable',reason:'official-source-timeout'});},timeoutMs);});
+    const check=(async()=>{
+      try{
+        const response=await fetchImpl(url,{redirect:'error',signal:controller.signal});
+        if(!response.ok)return {...base,status:'Unavailable',reason:'official-source-http-error',httpStatus:Number.isInteger(response.status)?response.status:null};
+        const body=await response.text();if(body.length>2000000)return {...base,status:'Unavailable',reason:'official-source-too-large'};
+        if(controller.signal.aborted)return {...base,status:'Unavailable',reason:'official-source-timeout'};
+        const hash=digest(body),key=`observability:pricing-source:${url.href}`,old=this.store?.getSetting(key);
+        this.store?.setSetting(key,hash);
+        return {...base,status:'Observed',digest:hash,changed:old!=null&&old!==hash,baseline:old==null};
+      }catch{return {...base,status:'Unavailable',reason:controller.signal.aborted?'official-source-timeout':'official-source-network-or-redirect-error'};}
+    })();
+    try{return await Promise.race([check,timeout]);}finally{clearTimeout(timer);}
   }
 }

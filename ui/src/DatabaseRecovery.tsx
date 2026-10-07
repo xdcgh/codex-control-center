@@ -1,0 +1,12 @@
+import {useEffect,useState} from 'react';
+import {invoke} from '@tauri-apps/api/core';
+type Request=(method:string,params?:unknown)=>Promise<unknown>;
+export function DatabaseRecovery({request}:{request:Request}){
+ const [health,setHealth]=useState<unknown>(null);useEffect(()=>{request('snapshot').then(v=>setHealth((v as {database?:unknown}).database??null)).catch(e=>setHealth({error:String(e)}));},[request]);
+ const [backup,setBackup]=useState(''),[destination,setDestination]=useState(''),[confirmed,setConfirmed]=useState(false),[result,setResult]=useState<unknown>(null),[busy,setBusy]=useState(false);
+ const run=async(fn:()=>Promise<unknown>)=>{setBusy(true);try{setResult(await fn());}catch(e){setResult({error:String(e)});}finally{setBusy(false);}};
+ return <section className="panel"><h2>Database safety and recovery</h2><p className="caption">Backup is WAL-consistent. Recovery requires the background owner to be stopped and preserves the replaced database, WAL and SHM. Codex Desktop stays open. Restored state blocks every resume until a fresh Doctor passes and you explicitly acknowledge review; automatic recovery remains off.</p>
+ {health!=null&&<pre>{JSON.stringify(health,null,2)}</pre>}<label>New backup destination <input value={destination} onChange={e=>setDestination(e.target.value)}/></label><button disabled={busy||!destination} onClick={()=>void run(()=>request('database/backup',{destination}))}>Create verified backup</button>
+ <label>Verified backup to restore <input value={backup} onChange={e=>setBackup(e.target.value)}/></label><label><input type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/> I confirm preserving recovery and will review restored thread policies and ledger before enabling automatic recovery.</label>
+ <div className="tabs"><button disabled={busy||!confirmed} onClick={()=>void run(()=>request('shutdown'))}>Stop background owner for recovery</button><button disabled={busy||!confirmed||!backup} onClick={()=>void run(()=>invoke('recover_database',{backupFile:backup,confirmed}))}>Restore while owner is stopped</button><button disabled={busy} onClick={()=>void run(()=>invoke('restart_background'))}>Restart background owner</button><button disabled={busy||!confirmed} onClick={()=>void run(()=>request('database/acknowledge',{confirmed}))}>Run fresh Doctor and acknowledge review</button></div>{result!=null&&<pre>{JSON.stringify(result,null,2)}</pre>}</section>;
+}
