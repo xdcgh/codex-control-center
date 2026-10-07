@@ -16,4 +16,6 @@ Updated 2026-10-07. This record covers source publication; it is separate from p
 
 Gitleaks archives were downloaded from the official project release and verified against its published SHA256 list before execution. Raw scan reports are kept privately outside this repository. A zero result is evidence of this scan, not a guarantee that arbitrary future commits are safe.
 
+The scanner flagged a diagnostic-export test's list of synthetic sentinel names as a generic API key. Source review confirmed that the list contains no credential. `.gitleaks.toml` inherits all default rules and permits only that exact full assertion line in that exact test file (both conditions required). Any changed sentinel, added value, different file, or actual credential remains subject to the default scan. The commit was held locally until the reviewed scan passed; no secret was published.
+
 Repeat changed-source and reachable-history scans before public pushes. Do not include raw secrets or private diagnostic content in scanner output or public reports. New distribution binaries, installer contents and generated screenshots require their own publication review.

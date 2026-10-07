@@ -1,0 +1,14 @@
+title = "Codex Control Center publication scan"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Exact synthetic diagnostic-export assertion, containing no credential"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^test[/\\]acceptance-observability\.test\.mjs$''']
+regexes = ['''^\s*for \(const secret of \['SYNTH_THREAD_ID_7F3A','SYNTH_TURN_ID_298A','SYNTH_GOAL_550E','SYNTH_PRIVATE_PATH_84B2','SYNTH_EMAIL_13DD','SYNTH_AUTH_92A1','SYNTH_PRIVATE_PROMPT_6C2A','SYNTH_TOOL_ARGS_66B1'\]\) \{$''']
