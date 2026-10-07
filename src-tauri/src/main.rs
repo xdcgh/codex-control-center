@@ -76,9 +76,13 @@ async fn ensure_owner(app:&tauri::AppHandle)->Result<(),String>{
         let control:Value=serde_json::from_slice(&fs::read(PathBuf::from(legacy).join("control.json")).map_err(|_|"Legacy handover status is unavailable.")?).map_err(|_|"Legacy handover status is invalid.")?;
         if control["enabled"]!=false{return Err("The legacy watchdog is still enabled. Finish the safe owner handover before starting this service.".into());}
     }
-    let state=PathBuf::from(config["stateDirectory"].as_str().ok_or("state-directory-missing")?);
     let owner=owner_anchor(app)?.join("daemon.lock");
-    if owner.exists()||state.join("daemon.lock").exists(){return Err("The existing background owner is starting or unavailable. A second service was not started.".into());}
+    if owner.exists(){
+      let (node,source)=core_assets(app)?;let mut probe=std::process::Command::new(node);probe.arg("--disable-warning=ExperimentalWarning").arg(source.join("core/ownership.mjs")).arg("--print-owner-state");
+      #[cfg(windows)] {use std::os::windows::process::CommandExt;probe.creation_flags(0x08000000);}
+      let output=probe.stderr(std::process::Stdio::null()).output().map_err(|_|"owner-liveness-proof-unavailable")?;let status:Value=serde_json::from_slice(&output.stdout).map_err(|_|"owner-liveness-proof-invalid")?;
+      if !output.status.success()||status["alive"]!=false{return Err("The existing background owner is starting or unavailable. A second service was not started.".into());}
+    }
     let resources=app.path().resource_dir().map_err(|_|"resources-unavailable")?;
     let mut node=resources.join("node.exe");let mut source=resources.join("core/src/core-cli.mjs");
     #[cfg(debug_assertions)] {if !node.is_file(){node=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.packaged/node.exe");source=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/core-cli.mjs");}}
@@ -111,10 +115,24 @@ fn ui_preferences(app:tauri::AppHandle,update:Option<Value>)->Result<Value,Strin
 fn show_window(app:tauri::AppHandle,label:String)->Result<(),String>{let window=app.get_webview_window(&label).ok_or("window-unavailable")?;window.show().map_err(|_|"window-show-failed")?;let _=window.set_focus();Ok(())}
 
 #[tauri::command]
-fn set_autostart(app:tauri::AppHandle,enabled:bool)->Result<bool,String>{if enabled{app.autolaunch().enable()}else{app.autolaunch().disable()}.map_err(|_|"autostart-update-failed")?;app.autolaunch().is_enabled().map_err(|_|"autostart-status-failed".into())}
+fn set_autostart(app:tauri::AppHandle,enabled:bool)->Result<bool,String>{
+ let service=app.state::<Service>();if service.startup_error.is_some(){return Err("Reconnect the original configuration before changing startup.".into());}
+ // Move the known development core task to GUI-managed login startup. Disabling never stops its current run.
+ owned_autostart_task(&app,"Disable")?;
+ if enabled{app.autolaunch().enable().map_err(|_|"autostart-update-failed")?;}else if app.autolaunch().is_enabled().map_err(|_|"autostart-status-failed")?{app.autolaunch().disable().map_err(|_|"autostart-update-failed")?;}app.autolaunch().is_enabled().map_err(|_|"autostart-status-failed".into())
+}
+
+fn owned_autostart_task(app:&tauri::AppHandle,mode:&str)->Result<Value,String>{
+ let (_,source)=core_assets(app)?;let powershell=PathBuf::from(std::env::var("SystemRoot").map_err(|_|"windows-directory-unavailable")?).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+ let mut command=std::process::Command::new(powershell);command.args(["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File"]);command.arg(source.parent().ok_or("core-directory-unavailable")?.join("scripts/Control-Autostart.ps1")).arg("-Mode").arg(mode);
+ if mode=="Disable"{let anchor=owner_anchor(app)?;command.arg("-BackupDirectory").arg(anchor.parent().ok_or("owner-profile-unavailable")?.join("autostart-backups"));}
+ #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000000);}
+ let output=command.stderr(std::process::Stdio::null()).output().map_err(|_|"autostart-task-probe-unavailable")?;if !output.status.success(){return Err("Autostart task could not be verified as owned; no unrelated task was changed.".into());}
+ serde_json::from_slice(&output.stdout).map_err(|_|"autostart-task-response-invalid".into())
+}
 
 #[tauri::command]
-fn get_autostart(app:tauri::AppHandle)->Result<bool,String>{app.autolaunch().is_enabled().map_err(|_|"autostart-status-failed".into())}
+fn get_autostart(app:tauri::AppHandle)->Result<bool,String>{let task=owned_autostart_task(&app,"Status")?;Ok(task["enabled"]==true||app.autolaunch().is_enabled().map_err(|_|"autostart-status-failed")?)}
 
 #[tauri::command]
 fn save_diagnostics(app:tauri::AppHandle,value:Value)->Result<String,String>{
@@ -151,11 +169,11 @@ fn tray(app:&tauri::AppHandle)->Result<(),Box<dyn std::error::Error>>{
    MenuItem::with_id(app,"dashboard","Open Dashboard",true,None::<&str>)?,MenuItem::with_id(app,"threads","Open Threads",true,None::<&str>)?,MenuItem::with_id(app,"widget","Show Widget",true,None::<&str>)?,MenuItem::with_id(app,"refresh","Refresh",true,None::<&str>)?,MenuItem::with_id(app,"pause","Pause Auto Resume",true,None::<&str>)?,MenuItem::with_id(app,"resume","Resume Eligible Tasks",true,None::<&str>)?,MenuItem::with_id(app,"autostart","Start with Windows",true,None::<&str>)?,MenuItem::with_id(app,"doctor","Diagnostics",true,None::<&str>)?,MenuItem::with_id(app,"exit-ui","Exit UI (keep background service)",true,None::<&str>)?,MenuItem::with_id(app,"exit-all","Exit UI and background service",true,None::<&str>)?];
  let references:Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>>=items.iter().map(|i|i as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect();
  let menu=Menu::with_items(app,&references)?;
- TrayIconBuilder::with_id("main-tray").icon(app.default_window_icon().ok_or("default-icon-missing")?.clone()).menu(&menu).show_menu_on_left_click(false)
+ TrayIconBuilder::with_id("main-tray").tooltip("Codex Control Center · Connecting to background owner").icon(app.default_window_icon().ok_or("default-icon-missing")?.clone()).menu(&menu).show_menu_on_left_click(false)
  .on_tray_icon_event(|tray,event|{if matches!(event,TrayIconEvent::Click{button:MouseButton::Left,button_state:MouseButtonState::Up,..}){show(tray.app_handle(),"compact",None);}})
  .on_menu_event(|app,event|{let id=event.id.as_ref();match id{
   "dashboard"=>show(app,"main",Some("Dashboard")),"threads"=>show(app,"main",Some("Threads")),"widget"=>show(app,"widget",None),"doctor"=>show(app,"main",Some("Diagnostics")),
-  "autostart"=>{let manager=app.autolaunch();if manager.is_enabled().unwrap_or(false){let _=manager.disable();}else{let _=manager.enable();}},"exit-ui"=>app.exit(0),
+  "autostart"=>{if let Ok(enabled)=get_autostart(app.clone()){let _=set_autostart(app.clone(),!enabled);}},"exit-ui"=>app.exit(0),
   "refresh"|"pause"|"resume"|"exit-all"=>{let handle=app.clone();let id=id.to_string();tauri::async_runtime::spawn(async move{let service=handle.state::<Service>();match id.as_str(){"refresh"=>{let _=request(&service,"refresh",json!({})).await;},"pause"=>{let _=request(&service,"settings/update",json!({"autoResume":false})).await;},"resume"=>{let _=request(&service,"settings/update",json!({"autoResume":true})).await;let _=request(&service,"refresh",json!({})).await;},"exit-all"=>{let _=request(&service,"shutdown",json!({})).await;handle.exit(0);},_=>{}}});},_=>{}}}).build(app)?;
  let handle=app.clone();tauri::async_runtime::spawn(async move{
   let mut previous:Option<Value>=None;
@@ -164,7 +182,8 @@ fn tray(app:&tauri::AppHandle)->Result<(),Box<dyn std::error::Error>>{
    match result{
     Ok(value)=>{
      let windows=value["quota"]["windows"].as_array();
-     for(duration,item,label)in [(300,&quota5,"5h"),(10080,&quota7,"7d")]{let text=windows.and_then(|ws|ws.iter().find(|w|w["durationMinutes"]==duration)).and_then(|w|w["remainingPercent"].as_f64()).map(|left|format!("{label}: {left:.0}% remaining")).unwrap_or(format!("{label}: unavailable"));let _=item.set_text(text);}
+     let mut quota_labels=Vec::new();for(duration,item,label)in [(300,&quota5,"5h"),(10080,&quota7,"7d")]{let window=windows.and_then(|ws|ws.iter().find(|w|w["durationMinutes"]==duration));let reset=window.and_then(|w|w["resetsAt"].as_i64()).and_then(chrono::DateTime::from_timestamp_millis).map(|date|date.with_timezone(&chrono::Local).format(if duration==300{"%H:%M"}else{"%A %H:%M"}).to_string()).unwrap_or("unavailable".into());let text=window.and_then(|w|w["remainingPercent"].as_f64()).map(|left|format!("{label}: {left:.0}% remaining · reset {reset}")).unwrap_or(format!("{label}: unavailable"));let _=item.set_text(&text);quota_labels.push(text);}
+     if let Some(icon)=handle.tray_by_id("main-tray"){let _=icon.set_tooltip(Some(format!("Codex Control Center\n{}",quota_labels.join("\n"))));}
      let tasks=value["tasks"].as_array();let working=tasks.map(|t|t.iter().filter(|t|t["phase"]=="watching"&&t["reason"]=="running").count()).unwrap_or(0);let waiting=tasks.map(|t|t.iter().filter(|t|t["phase"]=="waitingQuota").count()).unwrap_or(0);let _=running.set_text(format!("Running: {working} · Waiting quota: {waiting}"));
      let _=handle.emit("core/snapshot",&value);
      let notify=handle.state::<Service>().preferences.lock().map(|p|p["notifications"].as_bool().unwrap_or(true)).unwrap_or(false);
@@ -184,7 +203,7 @@ fn main(){
  if std::env::args().any(|arg|arg=="--pipe-broker-helper"){pipe_helper::run();return;}
  #[cfg(debug_assertions)] {let args:Vec<String>=std::env::args().collect();if let Some(index)=args.iter().position(|arg|arg=="--probe-config-binding"){let profile=PathBuf::from(args.get(index+1).expect("test-profile-required"));match config_binding::choose_existing(&profile,None){Ok(selected)=>println!("{}",json!({"selected":selected})),Err(error)=>{println!("{}",json!({"error":error}));std::process::exit(1);}}return;}}
  tauri::Builder::default()
- .plugin(tauri_plugin_single_instance::init(|app,_,_|{show(app,"main",None);}))
+ .plugin(tauri_plugin_single_instance::init(|app,args,_|{if args.iter().any(|arg|arg=="--exit-ui"){app.exit(0);}else if args.iter().any(|arg|arg=="--enable-autostart"){let _=set_autostart(app.clone(),true);}else{show(app,"main",None);}}))
  .plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build())
  .plugin(tauri_plugin_notification::init())
  .plugin(tauri_plugin_window_state::Builder::default().build())
@@ -196,7 +215,8 @@ fn main(){
     let preferences=fs::read(&preferences_file).ok().and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or(json!({"theme":"dark","privacy":false,"widgetExpanded":false,"widgetLocked":false,"widgetOpacity":0.95,"widgetPinned":true,"notifications":true,"widgetVisible":false}));
     app.manage(Service{config,preferences:Mutex::new(preferences),preferences_file,startup_error});
     restore_visible_windows(&handle);
-    if std::env::args().any(|arg|arg=="--enable-autostart"){let _=app.autolaunch().enable();}
+    if std::env::args().any(|arg|arg=="--enable-autostart"){let _=set_autostart(handle.clone(),true);}
+    if std::env::args().any(|arg|arg=="--exit-ui"){app.handle().exit(0);}
     if std::env::args().any(|arg|arg=="--background"){if let Some(window)=app.get_webview_window("main"){let _=window.hide();}}
     tray(&handle)?;
     tauri::async_runtime::spawn(async move{if let Err(reason)=ensure_owner(&handle).await{let _=handle.emit("core/disconnected",json!({"reason":reason}));}});

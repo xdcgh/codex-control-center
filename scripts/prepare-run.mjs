@@ -12,6 +12,7 @@ for(const name of ['node.exe','node-LICENSE','manifest.json']){
  if(!fs.existsSync(path.join(packaged,name)))throw new Error('prepare-sidecar-first');
  fs.copyFileSync(path.join(packaged,name),path.join(output,name));
 }
+for(const name of ['LICENSE','THIRD_PARTY_NOTICES.md','THIRD_PARTY_LICENSES.txt'])fs.copyFileSync(path.join(root,name),path.join(output,name));
 fs.cpSync(path.join(packaged,'core'),path.join(output,'core'),{recursive:true});
 fs.copyFileSync(exe,path.join(output,'codex-control-center.exe'));
 fs.writeFileSync(path.join(output,'run-manifest.json'),JSON.stringify({schemaVersion:1,build:'Tauri CLI application with embedded frontend',exeSha256:createHash('sha256').update(fs.readFileSync(path.join(output,'codex-control-center.exe'))).digest('hex'),node:JSON.parse(fs.readFileSync(path.join(packaged,'manifest.json'),'utf8'))}));
