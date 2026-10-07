@@ -1,0 +1,251 @@
+{
+  "schemaVersion": 1,
+  "id": "official-2026-10-07",
+  "retrievedAt": "2026-10-07T00:00:00Z",
+  "effectiveFrom": null,
+  "currency": "USD",
+  "unit": "per-1000000-tokens",
+  "source": "https://developers.openai.com/api/docs/pricing",
+  "rows": [
+    {
+      "provider": "openai",
+      "model": "gpt-6.1-sol",
+      "tier": "standard",
+      "threshold": 272000,
+      "short": {
+        "input": 2,
+        "cached": 0.1,
+        "write": 2.5,
+        "output": 10
+      },
+      "long": {
+        "input": 4,
+        "cached": 0.2,
+        "write": 5,
+        "output": 15
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "eligibility": "Published tier rates; region and FedRAMP adjustments require separate evidence"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6.1-sol",
+      "tier": "fast",
+      "threshold": 272000,
+      "short": {
+        "input": 4,
+        "cached": 0.2,
+        "write": 5,
+        "output": 20
+      },
+      "long": {
+        "input": 8,
+        "cached": 0.4,
+        "write": 10,
+        "output": 30
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "eligibility": "Published tier rates; region and FedRAMP adjustments require separate evidence"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6.1-sol",
+      "tier": "batch",
+      "threshold": 272000,
+      "short": {
+        "input": 1,
+        "cached": 0.05,
+        "write": 1.25,
+        "output": 5
+      },
+      "long": {
+        "input": 2,
+        "cached": 0.1,
+        "write": 2.5,
+        "output": 7.5
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "eligibility": "Published tier rates; region and FedRAMP adjustments require separate evidence"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6.1-sol",
+      "tier": "flex",
+      "threshold": 272000,
+      "short": {
+        "input": 1,
+        "cached": 0.05,
+        "write": 1.25,
+        "output": 5
+      },
+      "long": {
+        "input": 2,
+        "cached": 0.1,
+        "write": 2.5,
+        "output": 7.5
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "eligibility": "Published tier rates; region and FedRAMP adjustments require separate evidence"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "tier": "standard",
+      "threshold": 272000,
+      "short": {
+        "input": 10,
+        "cached": 1,
+        "write": 12.5,
+        "output": 50
+      },
+      "long": {
+        "input": 20,
+        "cached": 2,
+        "write": 25,
+        "output": 75
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+      "eligibility": "Published tier rates; region and FedRAMP adjustments require separate evidence"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "tier": "fast",
+      "threshold": 272000,
+      "short": {
+        "input": 20,
+        "cached": 2,
+        "write": 25,
+        "output": 100
+      },
+      "long": {
+        "input": 40,
+        "cached": 4,
+        "write": 50,
+        "output": 150
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+      "eligibility": "Published tier rates; region and FedRAMP adjustments require separate evidence"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "tier": "batch",
+      "threshold": 272000,
+      "short": {
+        "input": 5,
+        "cached": 0.5,
+        "write": 6.25,
+        "output": 25
+      },
+      "long": {
+        "input": 10,
+        "cached": 1,
+        "write": 12.5,
+        "output": 37.5
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+      "eligibility": "Published tier rates; region and FedRAMP adjustments require separate evidence"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "tier": "flex",
+      "threshold": 272000,
+      "short": {
+        "input": 5,
+        "cached": 0.5,
+        "write": 6.25,
+        "output": 25
+      },
+      "long": {
+        "input": 10,
+        "cached": 1,
+        "write": 12.5,
+        "output": 37.5
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+      "eligibility": "Published tier rates; region and FedRAMP adjustments require separate evidence"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "tier": "standard",
+      "threshold": 272000,
+      "short": {
+        "input": 0.1,
+        "cached": 0.01,
+        "write": 0.125,
+        "output": 0.5
+      },
+      "long": {
+        "input": 0.2,
+        "cached": 0.02,
+        "write": 0.25,
+        "output": 0.75
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "eligibility": "Published tier rates; region and FedRAMP adjustments require separate evidence"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "tier": "fast",
+      "threshold": 272000,
+      "short": {
+        "input": 0.2,
+        "cached": 0.02,
+        "write": 0.25,
+        "output": 1
+      },
+      "long": {
+        "input": 0.4,
+        "cached": 0.04,
+        "write": 0.5,
+        "output": 1.5
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "eligibility": "Published tier rates; region and FedRAMP adjustments require separate evidence"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "tier": "batch",
+      "threshold": 272000,
+      "short": {
+        "input": 0.05,
+        "cached": 0.005,
+        "write": 0.0625,
+        "output": 0.25
+      },
+      "long": {
+        "input": 0.1,
+        "cached": 0.01,
+        "write": 0.125,
+        "output": 0.375
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "eligibility": "Published tier rates; region and FedRAMP adjustments require separate evidence"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "tier": "flex",
+      "threshold": 272000,
+      "short": {
+        "input": 0.05,
+        "cached": 0.005,
+        "write": 0.0625,
+        "output": 0.25
+      },
+      "long": {
+        "input": 0.1,
+        "cached": 0.01,
+        "write": 0.125,
+        "output": 0.375
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "eligibility": "Published tier rates; region and FedRAMP adjustments require separate evidence"
+    }
+  ]
+}

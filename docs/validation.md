@@ -28,6 +28,20 @@ Source and license review is recorded in [research.md](research.md). Token/accou
 | OpenAI API model/pricing docs | **Reviewed 2026-10-07** | Public API pricing reference only; not Codex subscription billing or quota impact. |
 | Desktop framework docs | **Reviewed 2026-10-07** | Tauri 2, Windows App SDK/WinUI/WPF, Electron capabilities; no comparative benchmark run. |
 
+### Observability adapter targeted acceptance
+
+Targeted black-box acceptance: **PASS 6/6** via `node --test test/acceptance-observability.test.mjs`, using synthetic JSONL events and a temporary SQLite database. No actual Codex session data was read. This result does not represent a full `npm test` rerun after the observability files were added.
+
+Source identity: repository base commit `f901eab` plus the uncommitted working tree at test time. SHA-256 fingerprints:
+
+| File | SHA-256 |
+| --- | --- |
+| `src/observability/index.mjs` | `C0304F07C6994E3D8B3AB40C3E663E5BA971D56B48B3074C13A1D95F59C1A0E7` |
+| `src/observability/session-log-adapter.mjs` | `40C68B6852ED9168C607C9AAE639DC36BEAA996DC6A49DAC011D77AD19FDC8A7` |
+| `src/observability/pricing.mjs` | `06A54804CAC57AEE3B901AC2DF6507E1D4DE94481A5E282E2971B0662FB0A625` |
+| `pricing.json` | `5E71029349A2EAA4D69E22E5A1B57B5712ABA556DE29743D631DC3C588E38161` |
+| `test/acceptance-observability.test.mjs` | `A8D972F1FCFC2DD25E8E7F8A20401D38E3168EA7854994A71205228EF51CC737` |
+
 ## Windows build tool availability (read-only check)
 
 | Tool | Observation | Interpretation |
