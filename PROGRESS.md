@@ -16,7 +16,10 @@ Updated: 2026-10-07 (Asia/Shanghai).
 | New core | In progress | Not yet live-enabled |
 | New Desktop smoke | Not run | Existing scripts provision owned tests and consume model quota |
 | Natural quota cycle | NOT OBSERVED | Cannot be replaced by fixture tests |
-| Public repository/release | Pending security gate | No private runtime data staged |
+| Public repository | Created and initial commits/tags verified remotely | https://github.com/xdcgh/codex-control-center; passed history/working-file security gate |
+| Live Core v2 doctor | PASS: protocol, quota, dynamic catalog (7 models), Thread read, Goal read, dry-run resume | Existing Goal read only; no model turn initiated |
+| Legacy real quota cycle | Original Goal automatically continued after natural reset | Legacy 120-second buffer; incomplete final lifecycle, separate from new acceptance |
+| v0.1.0 release | Pending product acceptance and packaging | No private runtime data staged |
 
 ## Execution
 

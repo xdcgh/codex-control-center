@@ -1,0 +1,65 @@
+name: Core validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+      - name: Install locked dependencies when present
+        if: hashFiles('package-lock.json') != ''
+        run: npm ci
+      - name: Run isolated core tests
+        run: npm test
+
+  publication-security:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify and scan with Gitleaks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $taskArchive = Join-Path $env:RUNNER_TEMP 'gitleaks_8.30.1_windows_x64.zip'
+          $taskChecksums = Join-Path $env:RUNNER_TEMP 'gitleaks_8.30.1_checksums.txt'
+          $taskToolDirectory = Join-Path $env:RUNNER_TEMP 'gitleaks-8.30.1'
+          Invoke-WebRequest 'https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_windows_x64.zip' -OutFile $taskArchive
+          Invoke-WebRequest 'https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt' -OutFile $taskChecksums
+          $taskExpected = ((Get-Content -LiteralPath $taskChecksums | Where-Object { $_ -match 'gitleaks_8.30.1_windows_x64.zip$' }) -split '\s+')[0]
+          if ((Get-FileHash -LiteralPath $taskArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $taskExpected.ToLowerInvariant()) { throw 'Gitleaks checksum mismatch' }
+          Expand-Archive -LiteralPath $taskArchive -DestinationPath $taskToolDirectory
+          & (Join-Path $taskToolDirectory 'gitleaks.exe') git . --redact=100 --no-banner
+          if ($LASTEXITCODE -ne 0) { throw 'Reachable history secret scan failed' }
+          $taskTracked = git ls-files
+          if ($LASTEXITCODE -ne 0) { throw 'Tracked-file enumeration failed' }
+          if ($taskTracked | Where-Object { $_ -match '(^|/)(runtime|diagnostics|\.codex|node_modules)(/|$)|\.(db|sqlite|log)$|auth\.json$' }) { throw 'Private runtime material is tracked' }
+          foreach ($taskCommit in @(git rev-list --all)) {
+            git grep -q -I -E '([A-Za-z]:[/\\]Users[/\\][^/\\[:space:]]+|[A-Za-z]:[/\\]Codex[/\\]AppData)' $taskCommit
+            if ($LASTEXITCODE -eq 0) { throw 'Private user path found in public history' }
+            if ($LASTEXITCODE -gt 1) { throw 'History privacy scan failed' }
+          }

@@ -2,6 +2,8 @@
 
 Status: **NOT OBSERVED**. This file is an acceptance template, not evidence that a natural quota reset has been tested. A simulated quota fixture, manually edited state, or mocked reset must never be recorded as a natural cycle.
 
+The [legacy cycle observed on 2026-10-07](docs/evidence/legacy-natural-cycle-2026-10-07.md) continued the original Goal after a real reset, with the legacy 120-second buffer. Its final lifecycle is incomplete and it does not satisfy the new 10-second detector acceptance.
+
 ## Run identity
 
 | Field | Recorded value |
