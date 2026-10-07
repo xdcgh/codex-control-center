@@ -7,9 +7,10 @@ import { SqliteStore } from '../src/persistence/sqlite.mjs';
 import { ControlCenterCore } from '../src/core/control-center.mjs';
 import { migrateLegacy } from '../src/core/migration.mjs';
 import { assertOwnerHandover } from '../src/adapters/codex.mjs';
+import { NaturalCycleRecorder } from '../src/observability/natural-cycle.mjs';
 import { task,limits,NOW,THREAD,NEXT } from './fixtures.mjs';
 
-function rig({ execute=true, goal=false, settings={} }={}) {
+function rig({ execute=true, goal=false, settings={},natural=false }={}) {
   let now=NOW, quota=limits(), state=task({ status:'inProgress',goalStatus:goal?'active':undefined }), polls=0;
   const writes=[], store=new SqliteStore(':memory:',{now:()=>now});
   const desktop={ snapshot:async()=>({state:structuredClone(state),owner:'fixture'}), request:async(method,params)=>{writes.push(params);return{handledByClientId:'fixture',result:{result:{turn:{id:NEXT}}}}} };
@@ -20,8 +21,9 @@ function rig({ execute=true, goal=false, settings={} }={}) {
     throw Error('unexpected-method');
   }};
   const adapter={desktop,account,source:'simulated-test-fixture',compatibility:{verified:true,cliVersion:'fixture'},connect:async()=>{},readQuota:async()=>{polls++;return quota;}, listThreads:()=>[THREAD],isEligible:()=>true,snapshot:desktop.snapshot,unfollow:()=>{},verifyWriteSafety:()=>{},probeCompatibility:()=>{},close:async()=>{} };
-  let core=new ControlCenterCore({adapter,store,now:()=>now,execute,settings:{autoResume:true,...settings}});
-  return{store,adapter,writes,get core(){return core},get polls(){return polls},time:n=>now=n,quota:q=>quota=q,state:s=>state=s,restart:()=>{core=new ControlCenterCore({adapter,store,now:()=>now,execute});},async enroll(){await core.tick();state=task({goalStatus:goal?'usageLimited':undefined});now+=10000;await core.tick();},close(){store.close()}};
+  const recorder=natural?new NaturalCycleRecorder({store,now:()=>now}):undefined;
+  let core=new ControlCenterCore({adapter,store,recorder,now:()=>now,execute,settings:{autoResume:true,...settings}});
+  return{store,adapter,writes,recorder,get core(){return core},get polls(){return polls},time:n=>now=n,quota:q=>quota=q,state:s=>state=s,restart:()=>{core=new ControlCenterCore({adapter,store,recorder,now:()=>now,execute});},async enroll(){await core.tick();state=task({goalStatus:goal?'usageLimited':undefined});now+=10000;await core.tick();},close(){store.close()}};
 }
 
 test('live quota recovery fires at the next 10-second check, with independent 60-second history',async()=>{
@@ -56,4 +58,7 @@ test('legacy migration is dry-run by default and preserves uncertain intents',()
 test('two-owner execution is rejected until the legacy control is disabled',()=>{
  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'ccc-owner-fixture-'));
  try{const config={ownerHandoverAcknowledged:true,stateDirectory:path.join(directory,'new'),legacyStateDirectory:directory};fs.writeFileSync(path.join(directory,'control.json'),JSON.stringify({enabled:true}));assert.throws(()=>assertOwnerHandover(config),/must-be-paused/);fs.writeFileSync(path.join(directory,'control.json'),JSON.stringify({enabled:false}));assert.doesNotThrow(()=>assertOwnerHandover(config));assert.throws(()=>assertOwnerHandover({...config,ownerHandoverAcknowledged:false}),/explicit-owner-handover/);}finally{fs.rmSync(directory,{recursive:true,force:true});}
+});
+test('Core recorder hooks preserve a synthetic cycle with one real mock receipt and never call it natural PASS',async()=>{
+ const r=rig({natural:true});try{await r.enroll();r.time(NOW+70000);r.quota(limits({used:0,reset:NOW+18000000}));await r.core.tick();assert.equal(r.writes.length,1);const complete=task({status:'completed'});complete.turnHistory.history.entitiesByKey.tail.turnId=NEXT;r.state(complete);r.time(NOW+80000);await r.core.tick();const report=r.recorder.report();assert.equal(report.json.status,'SIMULATED');assert.equal(report.json.cycles[0].dispatchCount,1);assert.equal(report.json.cycles[0].detectedRecoveryAt,NOW+70000);assert.equal(report.json.cycles[0].resumeAt,NOW+70000);assert.equal(report.json.cycles[0].autoResumedAt,NOW+70000);assert.equal(report.json.cycles[0].nextTurnEndAt,NOW+80000);assert.equal(JSON.stringify(report).includes(THREAD),false);}finally{r.close();}
 });

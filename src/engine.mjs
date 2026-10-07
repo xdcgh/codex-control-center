@@ -101,6 +101,9 @@ export class WatchdogEngine {
       this.save(); return false;
     }
     const first = await this.desktop.snapshot(threadId);
+    if(first.state.resumeState!=='resumed'||first.state.threadRuntimeStatus?.type==='notLoaded'){
+      record.unavailableReason='desktop-thread-loading';this.transition(record,'waitingQuota','desktop-loading');this.save();return false;
+    }
     const key = record.attemptKey;
     let intent = this.state.ledger[key];
     if (intent && ['dispatching', 'uncertain', 'sent', 'confirmed'].includes(intent.phase)) {
@@ -130,6 +133,9 @@ export class WatchdogEngine {
       }
       // Fetch another complete snapshot after Goal restoration and immediately before dispatch.
       const fresh = await this.desktop.snapshot(threadId);
+      if(fresh.state.resumeState!=='resumed'||fresh.state.threadRuntimeStatus?.type==='notLoaded'){
+        record.unavailableReason='desktop-thread-loading';this.transition(record,'waitingQuota','desktop-loading');this.save();return false;
+      }
       if (this.confirmFromSnapshot(record, fresh.state)) return true;
       this.assertFresh(record, fresh.state, { goalRestored: record.goalStatus === 'usageLimited' });
       if (first.owner !== fresh.owner) throw new Error('desktop-owner-changed');

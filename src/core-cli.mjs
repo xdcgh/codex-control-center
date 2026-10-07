@@ -10,16 +10,28 @@ import { startBroker } from './core/broker.mjs';
 import { createRouter } from './core/router.mjs';
 import { ObservabilityClient } from './core/observability-client.mjs';
 import { resolveOwnerAnchor } from './core/ownership.mjs';
+import { brokerRequest } from './core/broker-client.mjs';
+import { NaturalCycleRecorder } from './observability/natural-cycle.mjs';
+import { backfillAutomaticRecoveryEvents } from './core/natural-backfill.mjs';
 
 const args = process.argv.slice(2), command = args[0] ?? 'doctor';
 const argument = key => { const i = args.indexOf(key); return i < 0 ? null : args[i+1]; };
 const output = value => process.stdout.write(JSON.stringify(value)+'\n');
 let store, adapter, core, release, ownerRelease, quotaTimer, broker,observability;
 try {
-  const configPath = argument('--config');
+  const profileRoot=path.dirname(resolveOwnerAnchor());
+  const bindingFile=path.join(profileRoot,'config-binding.json');
+  const binding=fs.existsSync(bindingFile)?JSON.parse(fs.readFileSync(bindingFile,'utf8')).config:null;
+  const defaultConfig=[binding,path.join(profileRoot,'config.json'),path.resolve(import.meta.dirname,'../runtime/config.json')].find(file=>typeof file==='string'&&fs.existsSync(file));
+  const configPath = argument('--config')??process.env.CODEX_CONTROL_CENTER_CONFIG??defaultConfig;
   if (!configPath) throw new Error('core-config-required');
   const config = JSON.parse(fs.readFileSync(configPath,'utf8'));
   if (![config.codexBin, config.codexHome, config.asarPath, config.stateDirectory].every(p => typeof p === 'string' && path.isAbsolute(p))) throw new Error('invalid-core-config');
+  const ownerDescriptor=path.join(config.stateDirectory,'broker','owner.json');
+  if(['status','history','doctor','shutdown','natural-report'].includes(command)&&fs.existsSync(ownerDescriptor)){
+    const method={status:'snapshot',history:'quota/history',doctor:'doctor',shutdown:'shutdown','natural-report':'natural/report'}[command];
+    output(await brokerRequest(config.stateDirectory,method,{...(command==='doctor'&&argument('--thread')?{threadId:argument('--thread')}:{ }),...(command==='history'?{since:Number(argument('--since')??0)}:{})}));
+  } else {
   adapter = new CodexAdapter(config);
   if (command === 'doctor') output(await adapter.doctor({ threadId: argument('--thread') }));
   else if (['run','sidecar','status','history','migrate'].includes(command)) {
@@ -28,7 +40,9 @@ try {
     store = new SqliteStore(path.join(config.stateDirectory,'control-center.sqlite'));
     if(command==='migrate')output(migrateLegacy(store,config.legacyStateDirectory,{dryRun:!args.includes('--apply')}));
     else {
-    core = new ControlCenterCore({ adapter, store, settings: config.settings ?? {}, execute: args.includes('--execute') });
+    const recorder=new NaturalCycleRecorder({store});
+    if(['run','sidecar'].includes(command))backfillAutomaticRecoveryEvents(recorder,store);
+    core = new ControlCenterCore({ adapter, store, recorder, settings: config.settings ?? {}, execute: args.includes('--execute') });
     if (command === 'status') output(core.snapshot());
     else if (command === 'history') output(store.queryQuotaHistory({ since: Number(argument('--since') ?? 0) }));
     else {
@@ -36,7 +50,7 @@ try {
       const finish = () => { stop = true; core.stopped = true; };
       process.on('SIGINT',finish); process.on('SIGTERM',finish);
       observability=new ObservabilityClient({database:path.join(config.stateDirectory,'control-center.sqlite'),codexHome:config.codexHome});
-      const route=createRouter({core,store,adapter,observability,shutdown:finish});
+      const route=createRouter({core,store,adapter,observability,recorder,shutdown:finish});
       const nativeBin=process.env.CODEX_CONTROL_CENTER_BROKER_HELPER??config.nativeBrokerBin;
       if(args.includes('--execute')&&!nativeBin)throw new Error('native-broker-helper-required-for-execution');
       broker=await startBroker({stateDirectory:config.stateDirectory,route,nativeBin,onFatal:finish});
@@ -62,5 +76,6 @@ try {
     }
     }
   } else throw new Error('usage: doctor | status | history | run | sidecar --config FILE [--execute]');
+  }
 } catch (error) { output({ ok:false,error:error.message }); process.exitCode=1; }
 finally { if(quotaTimer)clearInterval(quotaTimer);if(broker)await broker.close();if(observability)await observability.close(); if (core) await core.close(); else if (adapter) await adapter.close(); store?.close(); release?.(); ownerRelease?.(); }

@@ -11,8 +11,9 @@ export function validateSettings(value) {
 const defaults = s => ({ autoResume: true, allowAutomaticStart: true, neverAutoResume: false, manualPaused: false, priority: 2, order: 0, maxRetries: s.maxRetries, cooldownSeconds: s.cooldownSeconds, retryCount: 0, nextAttemptAt: 0 });
 
 export class ControlCenterCore {
-  constructor({ adapter, store, settings = {}, now = Date.now, execute = false }) {
+  constructor({ adapter, store, settings = {}, now = Date.now, execute = false,recorder }) {
     Object.assign(this, { adapter, store, now, execute });
+    this.recorder=recorder;
     this.settings = validateSettings(store.getSetting('core-settings', settings));
     store.setSetting('core-settings',this.settings);
     this.nextQuotaPollAt = 0; this.nextScanAt = 0; this.polling = null; this.nextHistorySampleAt = store.getSetting('next-history-sample-at', 0); this.nextCompatibilityAt = 0;
@@ -20,10 +21,15 @@ export class ControlCenterCore {
     const desktop = { snapshot: id => adapter.snapshot(id),
       request: (method, params, owner) => { this.assertThreadEnabled(params.conversationId); return adapter.desktop.request(method, params, owner); } };
     if (typeof adapter.desktop.getGeneration === 'function') desktop.getGeneration = id => adapter.desktop.getGeneration(id);
-    this.engine = new WatchdogEngine({ store, desktop, account: adapter.account, now, execute, quotaProbeMode: 'live', resetBufferMs: 0, continuationText: CONTINUATION_TEXT,
+    const account={request:async(method,params)=>{const result=await adapter.account.request(method,params);if(method==='account/rateLimits/read')this.recorder?.onQuota(result,this.now(),adapter.source);return result;}};
+    this.engine = new WatchdogEngine({ store, desktop, account, now, execute, quotaProbeMode: 'live', resetBufferMs: 0, continuationText: CONTINUATION_TEXT,
       enabled: id => !this.stopped && adapter.compatibility.verified && (this.manualResumes.has(id)||(this.settings.autoResume&&(!id||this.threadEnabled(id)))),
       enrollmentSince: () => this.enrollmentSince,
-      verifyDesktop: () => adapter.verifyWriteSafety(), log: (event, details) => store.event(event, details) });
+      verifyDesktop: () => adapter.verifyWriteSafety(), log: (event, details) => {
+        store.event(event,details);
+        const record=this.engine?.state.records[details.threadId],intent=this.engine?.state.ledger[record?.attemptKey];
+        this.recorder?.onEngineEvent(event,{...details,intent,observedAt:this.now(),source:adapter.source});
+      } });
     // Never silently enroll work that stopped before this application was enabled.
     this.enrollmentSince = this.settings.autoResume ? store.getSetting('enrollment-since', now()) : now();
     if (this.settings.autoResume) store.setSetting('enrollment-since', this.enrollmentSince);
@@ -46,6 +52,7 @@ export class ControlCenterCore {
     if (Object.keys(update).some(k => !allowed.includes(k))) throw new Error('unknown-thread-policy-field');
     const policy = { ...this.policy(id), ...update };
     if (['autoResume','allowAutomaticStart','neverAutoResume','manualPaused'].some(k => typeof policy[k] !== 'boolean') || !Number.isInteger(policy.priority) || policy.priority < 0 || policy.priority > 3 || !Number.isInteger(policy.order) || !Number.isInteger(policy.maxRetries) || policy.maxRetries < 1 || !Number.isFinite(policy.cooldownSeconds) || policy.cooldownSeconds < 0) throw new Error('invalid-thread-policy');
+    this.recorder?.onManualAction({threadId:id,action:'policy-change',observedAt:this.now()});
     this.store.setThreadPolicy(id, policy); this.store.event('thread-policy-updated', { threadId: id, changed: Object.keys(update) }); return policy;
   }
   async pollQuota() {
@@ -55,6 +62,7 @@ export class ControlCenterCore {
       try {
         await this.adapter.connect();
         const raw = await this.adapter.readQuota(); this.lastQuotaPollAt = this.now(); this.quota = quotaStatus(raw,this.now());
+        this.recorder?.onQuota(raw,this.lastQuotaPollAt,this.adapter.source);
         const bucket=raw?.rateLimitsByLimitId?.codex??raw?.rateLimits;
         this.quota.windows=[bucket?.primary,bucket?.secondary].filter(Boolean).map(w=>({durationMinutes:w.windowDurationMins??null,usedPercent:w.usedPercent??null,remainingPercent:Number.isFinite(w.usedPercent)?100-w.usedPercent:null,resetsAt:Number.isFinite(w.resetsAt)?w.resetsAt*1000:null}));
         this.quota.planType=typeof bucket?.planType==='string'?bucket.planType:null;
@@ -96,6 +104,10 @@ export class ControlCenterCore {
         if (!this.adapter.compatibility.verified) continue;
         try {
           const { state } = await this.adapter.snapshot(id); const decision = assess(state, { catalogPersistent: true });
+          const pending=this.engine.state.records[id];
+          if(pending?.failureTurnId&&(state.resumeState!=='resumed'||state.threadRuntimeStatus?.type==='notLoaded')){
+            pending.unavailableReason='desktop-thread-loading';this.engine.transition(pending,'waitingQuota','desktop-loading');if(state.resumeState==='resumed'&&state.threadRuntimeStatus?.type==='notLoaded')await this.reopenPending(pending);continue;
+          }
           const turn=latestTurn(state);
           const outstanding=Object.values(this.engine.state.ledger).filter(i=>i.threadId===id&&(['sent','uncertain','dispatching'].includes(i.phase)||i.lifecycle==='running'));
           for(const intent of outstanding)if(turn && turn.turnId!==intent.failureTurnId){intent.phase='confirmed';intent.confirmedTurnId=turn.turnId;intent.lifecycle=['completed','failed','interrupted'].includes(turn.status)?'finished':'running';}
@@ -104,6 +116,13 @@ export class ControlCenterCore {
           const acknowledgedLag=outstanding.some(i=>i.phase==='sent'&&turn?.turnId===i.failureTurnId);
           if(!acknowledgedLag)this.engine.observe(id, state, this.quota);
           const record = this.engine.state.records[id];
+          if(record&&decision.action==='quotaFailure'){
+            const policy=this.policy(id);if(policy.retryCount>=policy.maxRetries){policy.autoResume=false;this.store.setThreadPolicy(id,policy);this.engine.transition(record,'needsAttention','retry-limit-reached');}
+          }
+          if(record&&(decision.reason==='completed'||['complete','completed'].includes(state.threadGoal?.status)||state.completedThreadGoal?.status==='complete')){
+            const policy=this.policy(id);if(policy.retryCount){policy.retryCount=0;policy.nextAttemptAt=0;this.store.setThreadPolicy(id,policy);}
+          }
+          this.recorder?.onThread({threadId:id,snapshot:state,decision,record,intent:this.engine.state.ledger[record?.attemptKey],observedAt:this.now(),source:this.adapter.source==='official-app-server'?'desktop-ipc':this.adapter.source,versions:{cliVersion:this.adapter.compatibility.cliVersion,desktopVersion:this.adapter.compatibility.desktopVersion}});
           if(record) {
             record.title=typeof state.title==='string'?state.title:null;
             record.workspace=typeof state.cwd==='string'?state.cwd:null;
@@ -117,11 +136,7 @@ export class ControlCenterCore {
           const record = this.engine.state.records[id];
           if (record) {
             record.unavailableReason = error.message;
-            if(this.execute && this.settings.autoResume && this.threadEnabled(id) && this.quota?.ready && record.failureTurnId && record.phase==='waitingQuota' && this.now()>=(record.lastOpenAttemptAt??0)+120000 && typeof this.adapter.reopen==='function') {
-              let canOpen=true;
-              if(record.kind==='goal'){const {goal}=await this.adapter.account.request('thread/goal/get',{threadId:id});canOpen=goal?.status==='usageLimited'&&goalIdentity(goal)===record.goalIdentity;}
-              if(canOpen){record.lastOpenAttemptAt=this.now();this.adapter.reopen(id);this.store.event('opening-pending-chat',{threadId:id});}
-            }
+            await this.reopenPending(record);
           }
         } finally { this.adapter.unfollow?.(id); }
       }
@@ -145,6 +160,12 @@ export class ControlCenterCore {
     const available = Math.max(0,this.settings.maxConcurrentResumes-this.occupiedThreads().size);
     await Promise.all(queue.slice(0,available).map(({r,p}) => this.dispatch(r,p)));
   }
+  async reopenPending(record){
+    const id=record.threadId;if(!this.execute||!this.settings.autoResume||!this.threadEnabled(id)||!this.quota?.ready||!record.failureTurnId||record.phase!=='waitingQuota'||this.now()<(record.lastOpenAttemptAt??0)+120000||typeof this.adapter.reopen!=='function')return;
+    let canOpen=true;
+    if(record.kind==='goal'){const {goal}=await this.adapter.account.request('thread/goal/get',{threadId:id});canOpen=goal?.status==='usageLimited'&&goalIdentity(goal)===record.goalIdentity;}
+    if(canOpen){record.lastOpenAttemptAt=this.now();this.adapter.reopen(id);this.store.event('opening-pending-chat',{threadId:id});}
+  }
   async dispatch(record, policy) {
     if (this.active.has(record.threadId) || this.stopped || (!this.settings.autoResume&&!this.manualResumes.has(record.threadId))) return false;
     this.active.add(record.threadId);
@@ -153,10 +174,10 @@ export class ControlCenterCore {
       if(!await this.adapter.isEligible(record.threadId)){this.engine.transition(record,'inactive','archived-or-no-longer-root');delete record.failureTurnId;this.engine.save();return false;}
       this.adapter.verifyWriteSafety();
       const ok = await this.engine.recover(record.threadId);
-      if (ok) { policy.retryCount = 0; policy.nextAttemptAt = 0; this.store.event('auto-resumed',{ threadId:record.threadId }); }
+      if (ok) { if(!this.manualResumes.has(record.threadId))policy.retryCount++;policy.nextAttemptAt = 0; this.store.event('auto-resumed',{ threadId:record.threadId });this.recorder?.onEngineEvent('auto-resumed',{threadId:record.threadId,intent:this.engine.state.ledger[record.attemptKey],observedAt:this.now(),source:this.adapter.source}); }
       else if (record.phase === 'needsAttention') { policy.retryCount++; policy.autoResume = false; this.store.event('resume-needs-attention',{ threadId:record.threadId, reason:record.reason }); }
       else if (record.phase === 'waitingQuota' && record.reason === 'desktop-state-changed-before-send') { policy.retryCount++; policy.nextAttemptAt = this.now()+policy.cooldownSeconds*1000; }
-      if (policy.retryCount >= policy.maxRetries) { policy.autoResume = false; this.engine.transition(record,'needsAttention','retry-limit-reached'); }
+      if (!ok&&policy.retryCount >= policy.maxRetries) { policy.autoResume = false; this.engine.transition(record,'needsAttention','retry-limit-reached'); }
       const current=this.policy(record.threadId);
       current.retryCount=policy.retryCount;current.nextAttemptAt=policy.nextAttemptAt;
       if(record.phase==='needsAttention')current.autoResume=false;
@@ -182,13 +203,14 @@ export class ControlCenterCore {
   }
   async resumeNow(id) {
     if(!isUuid(id))throw new Error('invalid-thread-id');
+    this.recorder?.onManualAction({threadId:id,action:'resume-now',observedAt:this.now()});
     if(!this.execute)throw new Error('observe-mode-cannot-resume');
     const record=this.engine.state.records[id];
     if(!record?.failureTurnId||record.phase!=='waitingQuota')throw new Error('thread-not-eligible-for-quota-resume');
     if(this.active.has(id)||this.manualResumes.has(id))throw new Error('resume-already-in-flight');
     if(this.occupiedThreads().size>=this.settings.maxConcurrentResumes)throw new Error('resume-concurrency-limit');
     this.manualResumes.add(id);
-    try{const quota=quotaStatus(await this.adapter.readQuota(),this.now());if(!quota.known||!quota.ready)throw new Error(quota.reason);return{resumed:await this.dispatch(record,this.policy(id))};}finally{this.manualResumes.delete(id);}
+    try{const raw=await this.adapter.readQuota();this.recorder?.onQuota(raw,this.now(),this.adapter.source);const quota=quotaStatus(raw,this.now());if(!quota.known||!quota.ready)throw new Error(quota.reason);return{resumed:await this.dispatch(record,this.policy(id))};}finally{this.manualResumes.delete(id);}
   }
   async close() { this.stopped = true; if(this.polling) await this.polling; await this.adapter.close(); }
 }

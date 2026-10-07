@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { ControlCenterCore } from '../src/core/control-center.mjs';
 import { SqliteStore } from '../src/persistence/sqlite.mjs';
 import { resolveOwnerAnchor } from '../src/core/ownership.mjs';
@@ -181,10 +181,20 @@ test('settings changed through the public API survive reopening SQLite and overr
 
 test('owner anchor and single-writer lock remain stable when LOCALAPPDATA changes', () => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-profile-acceptance-'));
-  const previous = { user: process.env.USERPROFILE, app: process.env.LOCALAPPDATA, temp: process.env.TEMP };
+  const previous = { user: process.env.USERPROFILE, home: process.env.HOME, app: process.env.LOCALAPPDATA, temp: process.env.TEMP };
   let release;
   try {
+    if (process.platform === 'win32') {
+      const powershell = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
+      const literal = profile.replaceAll("'", "''");
+      const command = `$p='${literal}';$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;$acl=[System.IO.Directory]::GetAccessControl($p);if($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value){$acl.SetOwner($sid);[System.IO.Directory]::SetAccessControl($p,$acl)};$acl=[System.IO.Directory]::GetAccessControl($p);$acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value`;
+      let ownerSid;
+      try { ownerSid = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true, encoding: 'utf8', timeout: 8000 }).trim(); }
+      catch { throw new Error('synthetic-profile-owner-fixture-failed'); }
+      assert.match(ownerSid, /^S-1-5-\d+(?:-\d+)+$/);
+    }
     process.env.USERPROFILE = profile;
+    process.env.HOME = profile;
     process.env.LOCALAPPDATA = path.join(profile, 'appdata-one');
     process.env.TEMP = path.join(profile, 'temp-one');
     const first = resolveOwnerAnchor({ create: true });
@@ -207,6 +217,7 @@ test('owner anchor and single-writer lock remain stable when LOCALAPPDATA change
   } finally {
     release?.();
     if (previous.user == null) delete process.env.USERPROFILE; else process.env.USERPROFILE = previous.user;
+    if (previous.home == null) delete process.env.HOME; else process.env.HOME = previous.home;
     if (previous.app == null) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = previous.app;
     if (previous.temp == null) delete process.env.TEMP; else process.env.TEMP = previous.temp;
     fs.rmSync(profile, { recursive: true, force: true });
@@ -317,6 +328,42 @@ test('Resume now is a one-shot override for NeverAuto but preserves policy and s
       assert.equal(r.core.policy(THREAD).neverAutoResume, true);
     } finally { await r.close(); }
   });
+});
+
+test('consecutive accepted resumes that fail again consume the retry budget instead of resetting it', async () => {
+  const ids = [THREAD];
+  let acknowledged = 0;
+  const r = makeRig({ ids, execute: true, settings: { maxRetries: 2 }, requestHook: async ({ entry }) => ({
+    handledByClientId: entry.requestedOwner,
+    result: { result: { turn: { id: turnAt(100 + ++acknowledged) } } },
+  }) });
+  try {
+    await r.enrollQuotaStops();
+    r.setQuota(limits({ used: 0, weekly: 0 }));
+    r.advance(10000);
+    await r.tick();
+    assert.equal(r.writes.length, 1);
+    let resumedTurn = turnAt(101);
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      r.states.set(THREAD, withTurn(task({ status: 'inProgress' }), resumedTurn));
+      r.advance(10000);
+      await r.tick();
+      r.states.set(THREAD, withTurn(task({ status: 'failed' }), resumedTurn));
+      r.advance(10000);
+      await r.tick();
+      if (attempt === 0) {
+        assert.equal(r.writes.length, 2);
+        resumedTurn = turnAt(102);
+      }
+    }
+
+    assert.equal(r.writes.length, 2);
+    const taskState = r.core.snapshot().tasks[0];
+    assert.equal(taskState.policy.retryCount, 2);
+    assert.equal(taskState.policy.autoResume, false);
+    assert.equal(taskState.phase, 'needsAttention');
+  } finally { await r.close(); }
 });
 
 test('a sent continuation ledger prevents duplicate delivery after duplicate failure events and restart', async () => {
@@ -544,6 +591,31 @@ test('a Desktop that has unloaded the same Thread is reopened only after quota i
     assert.equal(r.core.snapshot().tasks[0].unavailableReason, undefined);
     assert.equal(r.writes.length, 1);
   } finally { await r.close(); }
+});
+
+test('loading or not-loaded Desktop snapshots preserve the quota incident and defer until the same Thread is ready', async t => {
+  for (const state of ['loading', 'notLoaded']) await t.test(state, async () => {
+    const r = makeRig();
+    try {
+      await r.enrollQuotaStops();
+      const failureTurnId = r.core.snapshot().tasks[0].failureTurnId;
+      r.states.set(THREAD, task({ status: 'failed', overrides: { resumeState: state } }));
+      r.advance(10000);
+      r.setQuota(limits({ used: 0, weekly: 0 }));
+      await r.tick();
+      const waiting = r.core.snapshot().tasks[0];
+      assert.equal(r.writes.length, 0);
+      assert.equal(r.reopens.length, 0);
+      assert.equal(waiting.failureTurnId, failureTurnId);
+      assert.equal(waiting.phase, 'waitingQuota');
+      assert.equal(waiting.reason, 'desktop-loading');
+
+      r.states.set(THREAD, task({ status: 'failed' }));
+      r.advance(10000);
+      await r.tick();
+      assert.equal(r.writes.length, 1);
+    } finally { await r.close(); }
+  });
 });
 
 test('an unloaded Goal that the user has paused is not reopened or resumed', async () => {

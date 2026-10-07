@@ -11,11 +11,15 @@ Updated 2026-10-07. This page separates baseline evidence, research, simulations
 | Legacy repository state | **Saved** | Legacy source baseline commit `56175194b7c4896c64636d161ecab4d0457beacc`, tag `legacy-watchdog-baseline-2026-10-07`. The original runtime daemon was not stopped or modified. |
 | New repository migration baseline | **Saved** | Initial import commit `e115cae` and tag `legacy-import-baseline-2026-10-07`. |
 | Existing Desktop smoke scripts | **Inspected, not run** | They create owned test Threads/Goals, navigate Desktop, send model turns and write receipts. Their side effects were excluded from Phase 0 read-only validation. |
-| Natural quota cycle | **NOT OBSERVED** | The 25 unit tests do not simulate or establish a real quota reset. See [acceptance record](../E2E-NATURAL-QUOTA-CYCLE.md). |
+| Natural quota cycle | **INCOMPLETE** | A real Core v2 reset and resume acknowledgement were observed, but the automatic event hook was missing and the original Goal/turn was still running. No completed natural-cycle pass is claimed. See [acceptance record](../E2E-NATURAL-QUOTA-CYCLE.md). |
 
 ### Legacy natural-event observation (not Core v2 acceptance)
 
 On 2026-10-07, the legacy watchdog recorded a Goal in `waitingQuota` at `02:51:39.149Z` with the 5-hour reset timestamp `1791343173` (`11:19:33 +08:00`). The legacy watchdog reported a continuation accepted at `03:21:44.163Z`. Record classification: **LEGACY / INCOMPLETE for Core v2**. This is operational evidence from the old daemon, not evidence for the new 10-second detector, scheduler, or Core v2 persistence. It must not be copied into the Core v2 natural-cycle acceptance as a pass.
+
+### Core v2 natural-event observation
+
+On 2026-10-07, a real reset was reported at `16:29:37.000 +08:00`; the Core v2 detector recorded all windows ready at `16:29:37.553` and accepted one continuation at `16:29:42.137`. Classification: **INCOMPLETE** because the automatic event hook was missing and the original Goal/turn was still running when this report was made. The 553 ms detection and 5.137 s acknowledgement intervals are partial observations only; they do not satisfy completion, event-history, or restart-persistence acceptance.
 
 ## Phase 1 — Research
 
@@ -60,24 +64,25 @@ Source identity: repository base commit `b4e9fe0` plus the uncommitted broker/de
 | `src-tauri/src/pipe_helper.rs` | `0DBFDF0BEEA1EA7870AC89C7EF602CEF2FB8315876B1CA3B5E97551F351E7CE7` |
 | `src-tauri/src/config_binding.rs` | `9A847E8004D5B42035A0D19570727FDC6724A8727CC4B81C631B2989341C440A` |
 | `src-tauri/src/main.rs` | `A1F5A7B0DD49787C3D9F6FEE801E2ECA3203E96934043634A0539DCA63F5AA51` |
-| Debug helper executable | `214C3195483857137A4E1DDD817DBB6C3299D23A07515FCC922F98E0B0971B42` |
+| Debug helper executable | `9D1DDFB9B1E003FC4A89494F9B656CD10951E0D022C118681350A7E496472DA7` |
 | `test/acceptance-broker.test.mjs` | `CAB50F43ADFD6E6C3EECA7B92E1ED1477319F381299BC2C742207671D2B6A057` |
 
 ### Core profile and Resume now targeted acceptance
 
-Targeted Core black-box checks: **PASS 8/8** via the `owner anchor`, concurrent `Resume now`, and one-shot `NeverAuto` test-name filters in `test/acceptance-core.test.mjs`. The binding-loss check used the debug helper's `--probe-config-binding` mode against a synthetic temporary profile. It verified that a missing binding plus an established-binding sentinel or stale owner marker fails closed and does not create a replacement config/state directory. No GUI, Core sidecar, Codex process, or real user profile was started or read. This is targeted evidence only, not a full-suite rerun after current source changes.
+Targeted Core black-box checks: **PASS 12/12** via selected test-name filters in `test/acceptance-core.test.mjs`. Coverage includes concurrent manual Resume now sharing a max-one slot, one-shot `NeverAuto` preservation and quota/user/compatibility gates, loading/not-loaded Desktop snapshots preserving the quota-wait incident, and a two-ACK retry cap after each resumed turn fails again. The binding-loss check used the debug helper's `--probe-config-binding` mode against a synthetic temporary profile and confirmed that a missing binding plus an established-binding sentinel, stale owner marker, or existing state database fails closed without creating replacement config/state. The owner fixture has an explicit current-SID owner and tests that changing LOCALAPPDATA/TEMP keeps the same USERPROFILE anchor; a reparse/junction anchor is rejected. No GUI, Core sidecar, Codex process, or real user profile was started or read. This is targeted evidence only, not a full-suite rerun after current source changes.
 
-Source identity: repository base commit `b4e9fe0` plus the current uncommitted Core/profile/test working tree. SHA-256 fingerprints:
+Source identity: repository base commit `b1d2850` plus the current uncommitted Core/profile/test working tree. SHA-256 fingerprints:
 
 | File | SHA-256 |
 | --- | --- |
 | `src/core/control-center.mjs` | `616229315E713F379A6A4ABAF498699EC12E9684D2BA3FE8CB02A3681AE827B2` |
-| `src/core/ownership.mjs` | `F73CEA2D742C91FCE03F7C2916DC097EB881C77861680044C601CF9B1BFAE3AF` |
+| `src/core/ownership.mjs` | `ACF432AFBD1C40C2B758B74E2F621D77716BD93B9D2217808955DE08D44DAC03` |
 | `src/adapters/codex.mjs` | `31D1815B52107ACDDA13ACFFC1581C5D9181B051AFCE97A0654D30C99FC9587F` |
-| `src/core-cli.mjs` | `C2F0C484ED17FA32E466D7A9A5C5ADAD8D7B6D0DFDFBDF3651CBE92C340098DA` |
+| `src/core-cli.mjs` | `0A335D4AA1B6FE841C84548B273DB0A4FC66C0D6EFADA9CD3392E0807556B4EF` |
 | `src-tauri/src/config_binding.rs` | `9A847E8004D5B42035A0D19570727FDC6724A8727CC4B81C631B2989341C440A` |
-| `src-tauri/src/main.rs` | `A1F5A7B0DD49787C3D9F6FEE801E2ECA3203E96934043634A0539DCA63F5AA51` |
-| `test/acceptance-core.test.mjs` | `6C058B49AADEEA4C475EAEA6D8503AEE40C936BC6C1736A1EEFFB0F083977038` |
+| `src-tauri/src/main.rs` | `84501EB0B1CF6BFDF1FE9F30DAF2E44E9DB8E744601DD8B14FE93EA3DEAF4E13` |
+| `src/engine.mjs` | `77BCC7222A88A2F6E37D09585757A403A2CBC95F5ECDCD1F509521AA0F629F5D` |
+| `test/acceptance-core.test.mjs` | `1798E11202DC4DDAC8BA65F319EEE8028CC774E10440B8B0D53159B23DBFECC3` |
 | Debug helper executable | `214C3195483857137A4E1DDD817DBB6C3299D23A07515FCC922F98E0B0971B42` |
 
 ## Windows build tool availability (read-only check)
@@ -102,7 +107,7 @@ This is a tool-presence record, not a build result. The task-specific Rust toolc
 | Phase 6 — Scheduler | Queue, concurrency, retry and reserve policy tests | Pending |
 | Phase 7 — Widget | Tray/widget and privacy-mode checks | Pending |
 | Phase 8 — Reliability | Restart, network failure, version mismatch, duplication, manual state changes, multiple tasks, database recovery | Pending |
-| Phase 9 — Natural quota cycle | Completed record in `E2E-NATURAL-QUOTA-CYCLE.md` from a real naturally reset window | **NOT OBSERVED** |
+| Phase 9 — Natural quota cycle | Completed record in `E2E-NATURAL-QUOTA-CYCLE.md` from a real naturally reset window | **INCOMPLETE** |
 | Phase 10 — Open-source release | Security gate, secret review, package hashes, installer and release verification | Pending |
 
 Never promote mocked fixtures, synthetic quota responses, or unit tests into natural-cycle evidence. Keep live smoke-test evidence separate from unit and integration results.

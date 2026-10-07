@@ -1,4 +1,4 @@
-export function createRouter({core,store,adapter,observability,shutdown}) {
+export function createRouter({core,store,adapter,observability,recorder,shutdown}) {
   return async request=>{
     if(!request || typeof request.method!=='string')throw new Error('invalid-request');
     if(request.method==='snapshot')return core.snapshot();
@@ -7,6 +7,7 @@ export function createRouter({core,store,adapter,observability,shutdown}) {
     if(request.method==='thread/resume')return core.resumeNow(request.params?.threadId);
     if(request.method==='quota/history')return store.queryQuotaHistory(request.params??{});
     if(request.method==='quota/chart')return store.queryQuotaChart(request.params??{});
+    if(request.method==='natural/report'){if(!recorder)throw new Error('natural-recorder-unavailable');return recorder.report({...(request.params??{}),versions:{cliVersion:adapter.compatibility.cliVersion,desktopVersion:adapter.compatibility.desktopVersion}});}
     if(request.method==='events/list')return store.events();
     if(request.method==='doctor')return adapter.doctor(request.params??{});
     if(request.method==='models/list'){await adapter.connect();return adapter.official.listModels();}

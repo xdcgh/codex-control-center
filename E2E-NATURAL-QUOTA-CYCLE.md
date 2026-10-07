@@ -1,6 +1,6 @@
 # Natural quota-cycle acceptance record
 
-Status: **NOT OBSERVED**. This file is an acceptance template, not evidence that a natural quota reset has been tested. A simulated quota fixture, manually edited state, or mocked reset must never be recorded as a natural cycle.
+Status: **INCOMPLETE**. A real Core v2 quota recovery was observed, but the Goal/turn was still running and the automatic lifecycle event hook was missing when evidence was captured. This is a partial natural observation, not a completed acceptance cycle. A simulated quota fixture, manually edited state, or mocked reset must never be recorded as a natural cycle.
 
 The [legacy cycle observed on 2026-10-07](docs/evidence/legacy-natural-cycle-2026-10-07.md) continued the original Goal after a real reset, with the legacy 120-second buffer. Its final lifecycle is incomplete and it does not satisfy the new 10-second detector acceptance.
 
@@ -8,46 +8,46 @@ The [legacy cycle observed on 2026-10-07](docs/evidence/legacy-natural-cycle-202
 
 | Field | Recorded value |
 | --- | --- |
-| Run ID | `<unique run id>` |
-| Evidence captured at | `<ISO-8601 with timezone>` |
-| Codex CLI version | `<version or unavailable>` |
-| Codex Desktop version/build | `<version/build or unavailable>` |
-| Control Center commit | `<full SHA>` |
-| Adapter/protocol compatibility | `<verified version and probe result>` |
-| Thread kind | `<Normal / Goal>` |
-| Thread ID | `<redacted stable fingerprint; never public raw ID>` |
-| Model ID | `<exact recorded ID>` |
-| Reasoning effort / service tier | `<observed values or unavailable>` |
-| Execution environment | `<Windows version; no private paths>` |
+| Run ID | `<private natural-cycle evidence ID; not exported>` |
+| Evidence captured at | `2026-10-07; timestamps below are +08:00` |
+| Codex CLI version | `Unavailable in this partial report` |
+| Codex Desktop version/build | `Unavailable in this partial report` |
+| Control Center source | `Core v2 working source at observation; exact revision not captured here` |
+| Adapter/protocol compatibility | `Verified for this run; version not captured here` |
+| Thread kind | `Goal` |
+| Thread ID | `Original thread confirmed privately; raw ID and fingerprint withheld` |
+| Model ID | `Unavailable in this partial report` |
+| Reasoning effort / service tier | `Unavailable in this partial report` |
+| Execution environment | `Windows; private paths withheld` |
 
 ## Natural-cycle events
 
 | Event | Timestamp | Evidence source and safe reference |
 | --- | --- | --- |
-| Structured usage-limit failure first observed | `<ISO-8601>` | `<redacted event/run reference>` |
-| Watcher persisted quota-wait record | `<ISO-8601>` | `<state-transition receipt>` |
-| Exhausted window(s) and reported resetsAt | `<window + ISO-8601>` | `<structured quota snapshot; percentages only>` |
-| Each exhausted window observed usable | `<per-window ISO-8601>` | `<structured quota snapshot>` |
-| Detector recognized all blocking windows usable | `<ISO-8601>` | `<poll receipt>` |
-| Fresh Thread/Goal state recheck | `<ISO-8601>` | `<status and compatibility result only>` |
-| Original-thread resume accepted | `<ISO-8601>` | `<send receipt; redacted IDs>` |
-| Original task completed or final outcome | `<ISO-8601>` | `<completion status only>` |
+| Structured usage-limit failure first observed | `Unavailable in this partial report` | `Automatic event hook missing` |
+| Watcher persisted quota-wait record | `Unavailable in this partial report` | `Automatic event hook missing` |
+| Exhausted window(s) and reported resetsAt | `5h reset 2026-10-07 16:29:37.000 +08:00; other window details unavailable` | `Natural report; no raw account data included` |
+| Each exhausted window observed usable | `Aggregate readiness observed at 2026-10-07 16:29:37.553 +08:00` | `Detector reported all blocking windows ready` |
+| Detector recognized all blocking windows usable | `2026-10-07 16:29:37.553 +08:00` | `Observed readiness receipt` |
+| Fresh Thread/Goal state recheck | `Succeeded; exact timestamp unavailable` | `One continuation was accepted for the original Goal` |
+| Original-thread resume accepted | `2026-10-07 16:29:42.137 +08:00` | `One dispatch / acknowledgement recorded` |
+| Original task completed or final outcome | `Still running at evidence capture` | `Natural cycle remains incomplete` |
 
 ## Outcome and integrity
 
 | Acceptance item | Result / evidence |
 | --- | --- |
-| Natural, non-simulated usage exhaustion and natural server reset observed | `<PASS / FAIL / NOT OBSERVED; evidence>` |
-| Every exhausted quota window became available before dispatch | `<PASS / FAIL; window evidence>` |
-| Resume targeted the same original Thread | `<PASS / FAIL; compare private ID locally, publish only fingerprint>` |
-| Goal identity/status/budget preserved when applicable | `<PASS / FAIL / N/A; safe metadata only>` |
-| Detection latency (`detected all windows usable - reset/availability observed`) | `<duration; disclose timestamp precision>` |
-| Resume latency (`resume accepted - detection`) | `<duration; disclose timestamp precision>` |
-| Duplicate Turn observed | `<YES / NO / UNKNOWN; evidence>` |
-| State survived process restart, if restart was part of this run | `<PASS / FAIL / NOT TESTED>` |
-| Manual intervention | `<NONE / describe without content>` |
-| Errors and recovery | `<safe error codes only; no prompts/tokens>` |
-| Final result | `<PASS / FAIL / INCOMPLETE>` |
+| Natural, non-simulated usage exhaustion and natural server reset observed | `PARTIAL; real reset/recovery observed, full event lifecycle missing` |
+| Every exhausted quota window became available before dispatch | `Aggregate readiness reported; individual window detail unavailable` |
+| Resume targeted the same original Thread | `Confirmed privately for the original Goal` |
+| Goal identity/status/budget preserved when applicable | `Identity continuity observed; final completion not observed` |
+| Detection latency (`detected all windows usable - reset/availability observed`) | `553 ms from the reported 5h reset; precision 1 ms` |
+| Resume latency (`resume accepted - detection`) | `5.137 s; precision 1 ms` |
+| Duplicate Turn observed | `One dispatch recorded; full lifecycle duplicate check incomplete` |
+| State survived process restart, if restart was part of this run | `NOT TESTED` |
+| Manual intervention | `Unavailable in this partial report` |
+| Errors and recovery | `Automatic lifecycle event hook missing; Goal still running at capture` |
+| Final result | `INCOMPLETE; not a Core v2 natural-cycle pass` |
 
 ## Evidence rules
 
