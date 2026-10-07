@@ -22,7 +22,7 @@ test('simulation records original reset and first all-window recovery durably, n
   recorder.onQuota(raw(0,0,500),132000,source);const intent=dispatch(recorder);
   recorder.onThread({threadId,snapshot:snapshot('completed',next),intent,observedAt:140000,source});
   const restarted=new NaturalCycleRecorder({store,now:()=>200000});restarted.onQuota(raw(0,0,900),200000,source);
-  const c=restarted.report({threadId}).json.cycles[0];assert.equal(c.status,'SIMULATED');assert.equal(c.originalExhaustedResetsAt,130000);assert.equal(c.detectedRecoveryAt,132000);assert.equal(c.detectionLatencyMs,2000);assert.equal(c.resumeLatencyMs,3000);assert.equal(c.dispatchCount,1);assert.equal(c.receipt,'OBSERVED');
+  const c=restarted.report({threadId}).json.cycles[0];assert.equal(c.status,'SIMULATED');assert.equal(c.originalExhaustedResetsAt,130000);assert.equal(c.detectedRecoveryAt,132000);assert.equal(c.detectionLatencyMs,2000);assert.equal(c.resumeLatencyMs,1000);assert.equal(c.resetToResumeLatencyMs,3000);assert.equal(c.dispatchCount,1);assert.equal(c.receipt,'OBSERVED');
 });
 test('real source without prior working or structured failure remains incomplete; Goal label alone is insufficient',t=>{
   const {recorder}=fixture(t);begin(recorder,{src:'official-app-server',working:false});

@@ -105,14 +105,14 @@ This is a tool-presence record, not a build result. The task-specific Rust toolc
 | Phase | Required evidence | Current state |
 | --- | --- | --- |
 | Phase 2 — Core v2 | Deterministic parser/state/scheduler tests; app-server integration with explicit authorization; durable-state restart tests; no duplicate dispatch | **Fixture suite PASS (52/52 at `0288b89`); phase remains pending** for runtime integration and owner handover |
-| Phase 3 — Desktop MVP | Packaged Tauri shell; tray/window/widget behavior and UI smoke | Pending |
+| Phase 3 — Desktop MVP | Packaged Tauri shell; tray/window/widget behavior and UI smoke | Tauri app is installed and running; Normal/Goal one-turn smokes passed. Full tray/widget/autostart/restore acceptance remains pending. |
 | Phase 4 — Observability | Quota history, token attribution and price-policy tests with exact/estimated/unavailable distinctions | Targeted tests **25/25 PASS**; remains pending complete root/fork/account scope and runtime observation |
 | Phase 5 — Performance | Instrumented client timings with labels that distinguish visible end-to-end timing from unavailable model timing | Pending |
 | Phase 6 — Scheduler | Queue, concurrency, retry and reserve policy tests | Pending |
 | Phase 7 — Widget | Tray/widget and privacy-mode checks | Pending |
 | Phase 8 — Reliability | Restart, network failure, version mismatch, duplication, manual state changes, multiple tasks, database recovery | Pending |
 | Phase 9 — Natural quota cycle | Completed record in `E2E-NATURAL-QUOTA-CYCLE.md` from a real naturally reset window | **INCOMPLETE** |
-| Phase 10 — Open-source release | Security gate, secret review, package hashes, installer and release verification | Pending |
+| Phase 10 — Open-source release | Security gate, secret review, package hashes, installer and release verification | Source/CI and staged payload equality pass; final install/restart and release publication remain pending. |
 
 Never promote mocked fixtures, synthetic quota responses, or unit tests into natural-cycle evidence. Keep live smoke-test evidence separate from unit and integration results.
 
@@ -123,3 +123,17 @@ Never promote mocked fixtures, synthetic quota responses, or unit tests into nat
 Both fixture rows were observed as `thread_source=agent`; each was absent from the Core candidate list and eligibility check, and neither appeared in Core thread records, policies, intents, or events (**2/2 isolated**). Detailed receipts remain in private temporary diagnostics; no IDs, prompts, account values, or user-thread content are included here. Existing Codex backend/Core processes remained running, and no existing user thread or Goal was changed.
 
 **Cleanup compatibility issue:** the two completed test fixtures remain unarchived. `thread/archive` returned JSON-RPC `-32600`, and the Desktop archive broadcast did not mark the catalog rows archived. This is a known issue for future Desktop/AppServer compatibility work. Do not stop/restart the owner or edit the Codex database to force cleanup. This smoke is not evidence of natural quota recovery or a complete product acceptance.
+
+### Extracted installer payload comparison — 2026-10-08
+
+Root installed the staged unsigned NSIS package into a new task-owned directory (installer exit code 0). The read-only `scripts/verify-installed-payload.mjs` comparison passed against the staged portable directory: 38 payload files on each side, 37 non-main-executable files byte-identical, four license/notice texts present, four PowerShell scripts present, and no credential/config/database/session/log/private-profile path matches. The pinned Node v24.21.0 runtime hash matched both manifests and the official digest.
+
+The executable's raw hashes differ, as expected for the Tauri bundler marker: installed contains one `__TAURI_BUNDLE_TYPE_VAR_NSS`, portable contains one `__TAURI_BUNDLE_TYPE_VAR_UNK`, and neither contains the other marker. Replacing only the same-length marker yields SHA-256 `0cc297210df4da36aa3789c4de3fc7109fbed2c2c56f92cf78e46f56b72983a8`, exactly matching the portable executable. Installer SHA-256: `3658fe49d349476e92263b32abe409a6be7c0715961d8b5192acbc1d8a7b5f78`; portable ZIP SHA-256: `5639a4badf20df817fb7e24e93841ce390a18d4fa14765820a9ddab4ac60511b`.
+
+This validates the staged installer payload against the staged portable build. It does not prove Windows reboot persistence or acceptance of later rebuilt installers; rerun the payload comparison whenever packaged features or artifact hashes change. No model turns were used for this comparison.
+
+### Maintenance and pricing interface targeted acceptance — 2026-10-08
+
+`test/acceptance-maintenance.test.mjs` (**5/5**) plus `test/observability.test.mjs` (**17/17**) passed together (**22/22**, 0 skipped). All storage/recovery fixtures use isolated temporary SQLite files; the pricing route test uses a temporary Observability Worker database and never calls the official pricing endpoint.
+
+Coverage includes v1→v2 migration with a pre-migration SQLite snapshot and preserved thread/intent/legacy aggregate state; schema-newer and corrupt-file fail-closed preservation; offline-proof and live-owner-marker gates; explicit confirmed+quiescent restore preserving the damaged database and sidecars while setting automatic recovery off/review required; Doctor-gated review acknowledgement does not turn automatic recovery back on; Core settings, thread-policy and manual Resume are blocked before quota/turn send until acknowledgement; 180-day daily aggregation with 30-day raw retention, reset-group min/mean/max/count, chart point labels, replay idempotence and reopen; and routed confirmed pricing override/history persistence across an Observability Worker restart. Recovery requires a production verified-offline entry point and visible UI review/acknowledgement before live use.

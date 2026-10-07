@@ -9,7 +9,7 @@ export function normalizeServiceTier(raw,provider) {
 }
 const fields = ['input', 'cached', 'write', 'output'];
 export function validatePricing(policy) {
-  if (policy?.schemaVersion !== 1 || typeof policy.id !== 'string' || !Number.isFinite(Date.parse(policy.retrievedAt)) || !Array.isArray(policy.rows)) throw new Error('invalid-pricing-schema');
+  if (policy?.schemaVersion !== 1 || typeof policy.id !== 'string' || !policy.id || policy.id.length>128 || !Number.isFinite(Date.parse(policy.retrievedAt)) || policy.effectiveFrom!=null&&!Number.isFinite(Date.parse(policy.effectiveFrom)) || policy.currency!=null&&policy.currency!=='USD' || policy.unit!=null&&policy.unit!=='per-1000000-tokens' || !Array.isArray(policy.rows)) throw new Error('invalid-pricing-schema');
   const seen = new Set();
   for (const row of policy.rows) {
     const key = `${row.provider}/${row.model}/${row.tier}`;
@@ -35,6 +35,15 @@ export class PricingPolicy {
     validatePricing(policy);
     if (this.snapshots().some(p => p.id === policy.id)) throw new Error('pricing-snapshot-id-exists');
     this.save(policy); this.policy = policy;
+  }
+  context(event) {
+    const unavailable=reason=>({status:'Unavailable',reason,context:null});
+    if(!['response','latest-sample'].includes(event.scope)||!Number.isSafeInteger(event.usage?.input_tokens)||event.usage.input_tokens<0)return unavailable('actual-request-input-unavailable');
+    const policy=this.snapshots().reverse().filter(p=>Date.parse(p.effectiveFrom??p.retrievedAt)<=event.timestamp).sort((a,b)=>Date.parse(b.effectiveFrom??b.retrievedAt)-Date.parse(a.effectiveFrom??a.retrievedAt))[0];
+    if(!policy)return unavailable('historical-context-rule-not-established');
+    const rows=policy.rows.filter(r=>r.model===event.model&&r.provider===event.provider),thresholds=new Set(rows.map(r=>r.threshold));
+    if(thresholds.size!==1)return unavailable('model-provider-context-rule-unavailable');
+    const threshold=[...thresholds][0];return {status:'Observed',threshold,inputTokens:event.usage.input_tokens,context:event.usage.input_tokens>threshold?'long':'short',snapshotId:policy.id};
   }
   estimate(event) {
     const unavailable = reason => ({ status: 'Unavailable', reason, usd: null, label: 'API-equivalent estimate; not a subscription bill' });

@@ -8,6 +8,7 @@ use tauri_plugin_notification::NotificationExt;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 mod pipe_helper;
 mod config_binding;
+mod notifications;
 
 struct Service { config: PathBuf, preferences: Mutex<Value>, preferences_file: PathBuf,startup_error:Option<String> }
 
@@ -103,7 +104,7 @@ async fn core_request(app:tauri::AppHandle,method:String,params:Option<Value>)->
 #[tauri::command]
 fn ui_preferences(app:tauri::AppHandle,update:Option<Value>)->Result<Value,String>{
  let service=app.try_state::<Service>().ok_or("app-starting")?;let mut prefs=service.preferences.lock().map_err(|_|"preferences-lock-failed")?;
- if let Some(value)=update {let object=value.as_object().ok_or("invalid-preferences")?;let current=prefs.as_object_mut().ok_or("invalid-preferences")?;for(key,value)in object{if !["theme","privacy","widgetExpanded","widgetLocked","widgetOpacity","widgetPinned","notifications","widgetVisible"].contains(&key.as_str()){return Err("unknown-preference".into());}current.insert(key.clone(),value.clone());}
+ if let Some(value)=update {let object=value.as_object().ok_or("invalid-preferences")?;let current=prefs.as_object_mut().ok_or("invalid-preferences")?;for(key,value)in object{if !["theme","privacy","widgetExpanded","widgetLocked","widgetOpacity","widgetPinned","notifications","notificationTypes","widgetVisible"].contains(&key.as_str()){return Err("unknown-preference".into());}if key=="notificationTypes"{let types=value.as_object().ok_or("invalid-notification-types")?;if types.iter().any(|(name,value)|!notifications::TYPES.contains(&name.as_str())||!value.is_boolean()){return Err("invalid-notification-type".into());}}current.insert(key.clone(),value.clone());}
  if !service.preferences_file.as_os_str().is_empty(){fs::create_dir_all(service.preferences_file.parent().ok_or("preferences-parent-missing")?).map_err(|_|"preferences-save-failed")?;
  fs::write(&service.preferences_file,serde_json::to_vec_pretty(&*prefs).map_err(|_|"preferences-invalid")?).map_err(|_|"preferences-save-failed")?;}
  if let Some(window)=app.get_webview_window("widget"){let _=window.set_always_on_top(prefs["widgetPinned"].as_bool().unwrap_or(true));}
@@ -177,6 +178,7 @@ fn tray(app:&tauri::AppHandle)->Result<(),Box<dyn std::error::Error>>{
   "refresh"|"pause"|"resume"|"exit-all"=>{let handle=app.clone();let id=id.to_string();tauri::async_runtime::spawn(async move{let Some(service)=handle.try_state::<Service>()else{return;};match id.as_str(){"refresh"=>{let _=request(&service,"refresh",json!({})).await;},"pause"=>{let _=request(&service,"settings/update",json!({"autoResume":false})).await;},"resume"=>{let _=request(&service,"settings/update",json!({"autoResume":true})).await;let _=request(&service,"refresh",json!({})).await;},"exit-all"=>{let _=request(&service,"shutdown",json!({})).await;handle.exit(0);},_=>{}}});},_=>{}}}).build(app)?;
  let handle=app.clone();tauri::async_runtime::spawn(async move{
   let mut previous:Option<Value>=None;
+  let mut planner=notifications::Planner::default();let mut notification_tick=0;
   loop{
    let Some(service)=handle.try_state::<Service>()else{tokio::time::sleep(Duration::from_millis(50)).await;continue;};let result=request(&service,"snapshot",json!({})).await;
    match result{
@@ -186,12 +188,11 @@ fn tray(app:&tauri::AppHandle)->Result<(),Box<dyn std::error::Error>>{
      if let Some(icon)=handle.tray_by_id("main-tray"){let _=icon.set_tooltip(Some(format!("Codex Control Center\n{}",quota_labels.join("\n"))));}
      let tasks=value["tasks"].as_array();let working=tasks.map(|t|t.iter().filter(|t|t["phase"]=="watching"&&t["reason"]=="running").count()).unwrap_or(0);let waiting=tasks.map(|t|t.iter().filter(|t|t["phase"]=="waitingQuota").count()).unwrap_or(0);let _=running.set_text(format!("Running: {working} · Waiting quota: {waiting}"));
      let _=handle.emit("core/snapshot",&value);
-     let notify=service.preferences.lock().map(|p|p["notifications"].as_bool().unwrap_or(true)).unwrap_or(false);
-     if notify {if let Some(old)=&previous {
-       if old["quota"]["ready"]==false&&value["quota"]["ready"]==true{let _=handle.notification().builder().title("Codex quota recovered").body("All blocking quota windows are available.").show();}
-       if old["quota"]["ready"]==true&&value["quota"]["ready"]==false&&value["quota"]["known"]==true{let _=handle.notification().builder().title("Codex quota exhausted").body("Eligible tasks will wait for real quota recovery.").show();}
-       if old["compatibility"]["verified"]==true&&value["compatibility"]["verified"]==false{let _=handle.notification().builder().title("Codex compatibility not verified").body("Automatic recovery is in safe mode.").show();}
-     }}previous=Some(value);
+     let prefs=service.preferences.lock().map(|p|p.clone()).unwrap_or(json!({"notifications":false}));
+     let events=request(&service,"events/list",json!({})).await.unwrap_or(json!([]));notification_tick+=1;
+     let natural=if notification_tick%30==0&&notifications::Planner::enabled(&prefs,"naturalCycle"){request(&service,"natural/report",json!({})).await.ok()}else{None};
+     for notice in planner.plan(previous.as_ref(),&value,events.as_array().map(Vec::as_slice).unwrap_or(&[]),natural.as_ref()){if notifications::Planner::enabled(&prefs,notice.kind){let _=handle.notification().builder().title(notice.title).body(notice.body).show();}}
+     previous=Some(value);
     },Err(reason)=>{let _=handle.emit("core/disconnected",json!({"reason":reason}));}
    }
    tokio::time::sleep(Duration::from_secs(2)).await;

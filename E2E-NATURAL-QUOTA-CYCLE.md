@@ -1,6 +1,28 @@
 # Natural quota-cycle acceptance record
 
-Status: **INCOMPLETE**. A real Core v2 quota recovery was observed, but the Goal/turn was still running and the automatic lifecycle event hook was missing when evidence was captured. This is a partial natural observation, not a completed acceptance cycle. A simulated quota fixture, manually edited state, or mocked reset must never be recorded as a natural cycle.
+Status: **INCOMPLETE**, updated 2026-10-08 (Asia/Shanghai). Three real Core v2 recovery episodes were recorded for the same original Goal. Two prove automatic continuation; one continued turn was subsequently interrupted. The original project Goal has not completed, so none is a complete natural acceptance cycle. Simulated quota fixtures and the separately documented Desktop Goal smoke do not satisfy this requirement.
+
+## Latest persisted observations
+
+CLI `0.160.1`; Desktop `26.930.61225`; model `gpt-6.1-sol`; kind `Goal`. Raw thread/turn identities, Goal content, private paths and recorder keys remain private. Same-thread and Goal identity correlations use persisted keyed fingerprints. Exact source revision at each event was not captured; do not infer it from the current checkout.
+
+All timestamps below are Asia/Shanghai. Latencies are client observations against a server reset reported with seconds precision; clock/network/poll uncertainty applies.
+
+| Episode | Structured failure observed | Reported reset | Recovery detected | Resume receipt | Detection latency | Detector-to-receipt | Reset-to-receipt | Outcome |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Oct 7 12:29:13.653 | Oct 7 16:29:37.000 | Oct 7 16:29:37.553 | Oct 7 16:29:42.137 | 553 ms | 4,584 ms | 5,137 ms | Continued, then naturally quota-limited again; Goal pending |
+| 2 | Oct 7 17:43:14.224 | Oct 7 21:30:10.000 | Oct 7 21:30:15.448 | Oct 7 21:30:19.937 | 5,448 ms | 4,489 ms | 9,937 ms | Continued turn later interrupted; episode FAIL; Goal pending |
+| 3 | Oct 7 23:03:53.045 | Oct 8 02:30:45.000 | Oct 8 02:30:47.471 | Oct 8 02:30:52.548 | 2,471 ms | 5,077 ms | 7,548 ms | Continuing at report capture; Goal pending |
+
+Each episode has one persisted dispatch intent, an observed transport receipt, an automatic-resume event and the correlated next-turn lifecycle. No second dispatch was observed for the ended turns; duplicate outcome for the still-running third turn remains unknown until it ends. Every dispatch was gated on actual availability of all blocking quota windows and a fresh thread/Goal read. No quota values, reset times or outcome states were edited to produce these observations.
+
+The earlier missing automatic event was backfilled from its exactly correlated persisted real recovery event, preserving that event's original timestamp. The implementation now records it directly. This repair does not create a synthetic completion or replace a failed/interrupted outcome with a pass.
+
+`resumeLatencyMs` now means **receipt minus detection**. `resetToResumeLatencyMs` separately reports receipt minus reported reset. The initial partial report below previously mislabeled 5.137 seconds as detector-to-receipt; its correct detector-to-receipt value is 4.584 seconds. Terminal Goal completion and physical Windows-restart acceptance remain outstanding.
+
+## Archived initial partial report
+
+The following records the limited information available at the first capture; the latest persisted observations above supersede its unavailable fields and timing definition.
 
 The [legacy cycle observed on 2026-10-07](docs/evidence/legacy-natural-cycle-2026-10-07.md) continued the original Goal after a real reset, with the legacy 120-second buffer. Its final lifecycle is incomplete and it does not satisfy the new 10-second detector acceptance.
 
@@ -42,7 +64,7 @@ The [legacy cycle observed on 2026-10-07](docs/evidence/legacy-natural-cycle-202
 | Resume targeted the same original Thread | `Confirmed privately for the original Goal` |
 | Goal identity/status/budget preserved when applicable | `Identity continuity observed; final completion not observed` |
 | Detection latency (`detected all windows usable - reset/availability observed`) | `553 ms from the reported 5h reset; precision 1 ms` |
-| Resume latency (`resume accepted - detection`) | `5.137 s; precision 1 ms` |
+| Resume latency (`resume accepted - detection`) | `4.584 s; corrected from initial reset-to-receipt value of 5.137 s` |
 | Duplicate Turn observed | `One dispatch recorded; full lifecycle duplicate check incomplete` |
 | State survived process restart, if restart was part of this run | `NOT TESTED` |
 | Manual intervention | `Unavailable in this partial report` |

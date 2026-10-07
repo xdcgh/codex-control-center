@@ -19,6 +19,10 @@ The original recovery engine remains in `src/`, with its original test suite in 
 
 Core v2 polls actual quota every 10 seconds by default, saves quota history independently every 60 seconds, and resumes eligible work without a reset buffer. Both short and weekly blocking windows must be available. Fresh-state/Goal checks and the durable send ledger prevent unsafe repeat dispatch; priority, quota reserve, concurrency and manual controls guard the queue. Unknown Desktop versions leave monitoring available and disable automatic writes.
 
-The headless suite currently passes 52 tests. Live read-only Doctor probes also passed on the pinned CLI/Desktop version. Desktop packaging and the new natural quota-cycle acceptance are still in progress.
+The desktop application includes a quota dashboard/history, Thread/Goal policies, token and performance views, diagnostics, tray and widget. Pricing uses versioned public-source snapshots; missing telemetry stays Partial or Unavailable. Independent tests, actual Desktop smokes and installed-application evidence are recorded in [validation](docs/validation.md), with their source stages and limits.
+
+The public repository and Windows/Linux CI are active. Staged unsigned Windows installer and portable artifacts have passed direct payload comparison and an installed GUI/UI-restart check. Physical Windows restart, actual tray clicks and full natural Goal completion remain open acceptance items. The [complete requirement audit](docs/acceptance-audit.md) tracks additional work; no production v0.1.0 release is claimed yet.
+
+For native builds and package verification, follow [Windows build instructions](docs/build.md). User runtime, sessions and authentication files are excluded from source and packages. A portable package keeps application data in the user's local profile; it is not a copy of Codex credentials or private threads.
 
 See [requirements](docs/requirements.md), [architecture decisions](docs/adr/001-desktop-stack.md), [security policy](SECURITY.md), and [third-party notices](THIRD_PARTY_NOTICES.md). Distribution packages will be published only after the security gate and required acceptance checks pass.

@@ -5,6 +5,8 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import "./style.css";
 import { quotaMetrics } from './quota-metrics.mjs';
+import PricingSettings from './PricingSettings';
+import ThreadDetails from './ThreadDetails';
 
 type WindowQuota = {
   durationMinutes: number;
@@ -13,6 +15,7 @@ type WindowQuota = {
   resetsAt: number | null;
 };
 type Policy = {
+  nextAttemptAt?:number;
   allowAutomaticStart: boolean;
   cooldownSeconds: number;
   order: number;
@@ -37,6 +40,7 @@ type Task = {
   failedAt?: number;
   lastTurnId?: string;
   policy: Policy;
+  repository?:string|null;currentTurnId?:string|null;currentTurnStatus?:string|null;turnStartedAt?:number|null;turnEndedAt?:number|null;modelContextWindow?:number|null;collaborationMode?:string|null;runtimeType?:string|null;runtimeFlags?:string[];metadataSource?:string;nextRecoveryCheckAt?:number;quotaAttribution?:{status:string;reason:string};
 };
 type Snapshot = {
   mode: string;
@@ -46,7 +50,8 @@ type Snapshot = {
     historySampleSeconds: number;
     maxConcurrentResumes: number;
     reservePercent: number;
-    maxRetries: number;
+  maxRetries: number;
+  nextAttemptAt?:number;
     cooldownSeconds: number;
   };
   compatibility: {
@@ -76,6 +81,7 @@ type Prefs = {
   widgetOpacity: number;
   widgetPinned: boolean;
   notifications: boolean;
+  notificationTypes?:Record<string,boolean>;
   widgetVisible: boolean;
 };
 type Sample = {
@@ -306,6 +312,7 @@ function App() {
             "Quota",
             "Tokens",
             "Performance",
+            "Pricing",
             "Settings",
             "Diagnostics",
           ].map((name, i) => (
@@ -470,7 +477,8 @@ function App() {
             </section>
           )}
           {page === "Quota" && <QuotaHistory now={now} />}
-          {page === "Tokens" && (
+          {page === 'Pricing' && <PricingSettings/>}
+            {page === "Tokens" && (
             <TokenAnalytics privacy={prefs?.privacy ?? false} />
           )}
           {page === "Performance" && <Performance />}
@@ -663,6 +671,7 @@ function ThreadList({
                 {task.reason}
               </p>
             )}
+            {!compact&&<ThreadDetails task={task} privacy={prefs?.privacy??true}/>}
           </div>
           <div className="thread-controls">
             <span
@@ -1080,6 +1089,7 @@ function Settings({
             }
           />
         </Setting>
+        {Object.entries({quotaExhausted:'Quota exhausted',taskWaiting:'Task waiting',quotaRecovered:'Quota recovered',threadResumed:'Thread auto resumed',resumeFailed:'Resume failed / needs attention',unknownVersion:'Unknown Codex version',weeklyLow:'Weekly quota low',naturalCycle:'Completed natural cycle'}).map(([key,title])=><Setting key={key} title={title} detail="Notify once on meaningful evidence changes"><input type="checkbox" disabled={prefs?.notifications===false} checked={prefs?.notificationTypes?.[key]??true} onChange={e=>void preference({notificationTypes:{...prefs?.notificationTypes,[key]:e.target.checked}})}/></Setting>)}
         <Setting title="Widget opacity" detail="Compact status transparency">
           <input
             type="range"

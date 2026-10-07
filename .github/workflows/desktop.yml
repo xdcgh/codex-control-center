@@ -65,6 +65,16 @@ jobs:
           node scripts/prepare-run.mjs --exe (Join-Path $env:GITHUB_WORKSPACE 'src-tauri/target/release/codex-control-center.exe') --output $taskPortableDirectory
           if ($LASTEXITCODE -ne 0) { throw 'Portable artifact assembly failed' }
           Copy-Item -LiteralPath 'LICENSE','THIRD_PARTY_NOTICES.md','THIRD_PARTY_LICENSES.txt' -Destination $taskPortableDirectory
+          $taskInstallers = @(Get-ChildItem -LiteralPath 'src-tauri/target/release/bundle/nsis' -Filter '*.exe')
+          if ($taskInstallers.Count -ne 1) { throw 'Exactly one built NSIS installer required' }
+          $taskInstalledDirectory = Join-Path $env:RUNNER_TEMP 'control-center-installed-payload'
+          if (Test-Path -LiteralPath $taskInstalledDirectory) { throw 'Installer verification target must be new' }
+          $taskInstallerProcess = Start-Process -FilePath $taskInstallers[0].FullName -ArgumentList ('/S /D=' + $taskInstalledDirectory) -WindowStyle Hidden -PassThru
+          if (-not $taskInstallerProcess.WaitForExit(30000)) { throw 'Installer verification timed out' }
+          $taskInstallerProcess.Refresh()
+          if ($taskInstallerProcess.ExitCode -ne 0) { throw 'Fresh NSIS installation failed' }
+          node scripts/verify-installed-payload.mjs --installed $taskInstalledDirectory --portable $taskPortableDirectory
+          if ($LASTEXITCODE -ne 0) { throw 'Installed payload verification failed' }
           Compress-Archive -LiteralPath (Get-ChildItem -LiteralPath $taskPortableDirectory | Select-Object -ExpandProperty FullName) -DestinationPath (Join-Path $taskReleaseDirectory 'codex-control-center-windows-x64-portable.zip')
           Get-ChildItem -LiteralPath 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' | Copy-Item -Destination $taskReleaseDirectory
           $taskHashLines = Get-ChildItem -LiteralPath $taskReleaseDirectory -File | ForEach-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.Name }

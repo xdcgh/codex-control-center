@@ -1,6 +1,6 @@
 # Publication security gate
 
-Updated 2026-10-07. This record covers source publication; it is separate from product and release acceptance.
+Updated 2026-10-08. This record covers source publication; it is separate from product and release acceptance. Changed checkpoints receive fresh scans before each push.
 
 | Gate | Result | Evidence and limits |
 | --- | --- | --- |
@@ -11,8 +11,8 @@ Updated 2026-10-07. This record covers source publication; it is separate from p
 | Fixtures and smoke helpers | PASS for initial import | Synthetic fixture IDs; live IDs are runtime-only values. Smoke receipts are outside tracked source |
 | Runtime, auth, diagnostics and databases | Excluded | Git ignore rules plus explicit tracked-file review; no application runtime imported |
 | Reference licenses | Reviewed | Eleven pinned repositories; unlicensed-at-pin code remains reference-only; no community implementation copied |
-| Dependency/package inventory | Pending | Must scan actual lockfiles and redistributed runtimes before release |
-| Screenshots | Pending | Public screenshots must use synthetic data or privacy mode and receive visual review |
+| Dependency/package inventory | PASS for current lockfiles and staged payload | Actual npm/Cargo/Node license texts bundled; MPL source availability recorded; new NSIS install compared directly with portable |
+| Screenshots | Private reviewed probes; public set pending | Live dashboard privacy mode inspected; public final-build screenshots still require selection and visual review |
 
 Gitleaks archives were downloaded from the official project release and verified against its published SHA256 list before execution. Raw scan reports are kept privately outside this repository. A zero result is evidence of this scan, not a guarantee that arbitrary future commits are safe.
 

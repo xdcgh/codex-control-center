@@ -4,6 +4,7 @@ export { SessionLogAdapter } from './session-log-adapter.mjs';
 export { PricingPolicy, validatePricing, normalizeServiceTier } from './pricing.mjs';
 
 export function percentile(values,p) { const v=values.filter(Number.isFinite).sort((a,b)=>a-b); return v.length?v[Math.max(0,Math.ceil(v.length*p)-1)]:null; }
+export function distribution(values,total=values.length) { const v=values.filter(Number.isFinite);return {samples:v.length,missing:total-v.length,mean:v.length?v.reduce((a,b)=>a+b,0)/v.length:null,p50:percentile(v,.5),p95:percentile(v,.95),min:v.length?Math.min(...v):null,max:v.length?Math.max(...v):null}; }
 export function unionDuration(intervals) {
   let total=0,start=null,end=null;
   for(const [a,b] of intervals.filter(([a,b])=>Number.isFinite(a)&&Number.isFinite(b)&&b>=a).sort((x,y)=>x[0]-y[0])) {
@@ -18,17 +19,18 @@ export class ObservabilityService {
     this.store=store;this.now=now;this.adapter=new SessionLogAdapter({store,codexHome,now});this.pricing=new PricingPolicy({store,policy});
   }
   poll() { return this.adapter.poll(); }
-  observeTurnMetadata({threadId,turnId,model,provider,rawServiceTier,effort,observedAt=this.now(),source}={}) {
+  observeTurnMetadata({threadId,turnId,model,provider,rawServiceTier,effort,collaborationMode,kind,modelContextWindow,turnStartedAtMs,turnCompletedAtMs,observedAt=this.now(),source}={}) {
     if(!['desktop-ipc','official-app-server'].includes(source)||typeof threadId!=='string'||typeof turnId!=='string'||!Number.isSafeInteger(observedAt)) throw new Error('invalid-observed-turn-metadata');
     const safe=v=>typeof v==='string'&&/^[a-zA-Z0-9._-]{1,128}$/.test(v)?v:null;
-    const metadata={model:safe(model),provider:safe(provider),rawServiceTier:safe(rawServiceTier),effort:safe(effort),source};
+    const number=v=>Number.isSafeInteger(v)&&v>=0?v:null;
+    const metadata={model:safe(model),provider:safe(provider),rawServiceTier:safe(rawServiceTier),effort:safe(effort),collaborationMode:safe(collaborationMode),kind:['goal','ordinary'].includes(kind)?kind:null,modelContextWindow:number(modelContextWindow),turnStartedAtMs:number(turnStartedAtMs),turnCompletedAtMs:number(turnCompletedAtMs),source};
     const key='observability:turn-metadata:'+digest([threadId,turnId]),history=this.store.getSetting(key,[]);
     if(JSON.stringify(history.at(-1)?.metadata)!==JSON.stringify(metadata)) { history.push({observedAt,metadata});this.store.setSetting(key,history); }
     return {recorded:true,source,scope:'exact-turn; only subsequent events are enriched'};
   }
   rows(table) { return this.store.db.prepare(`SELECT metadata_json FROM ${table}`).all().map(r=>JSON.parse(r.metadata_json)); }
   summary({since=0,groupBy='model'}={}) {
-    const keys={model:'model',tier:'serviceTier',effort:'effort',turn:'turnId',thread:'threadId',goal:'goalId',workspace:'workspace'};
+    const keys={model:'model',tier:'serviceTier',effort:'effort',collaboration:'collaborationMode',turn:'turnId',thread:'threadId',goal:'goalId',workspace:'workspace'};
     if(!keys[groupBy] && !windows[groupBy]) throw new Error('unsupported-group-by');
     const groups=new Map();
     const all=this.rows('token_usage').filter(e=>e.timestamp>=since);
@@ -47,22 +49,36 @@ export class ObservabilityService {
       const mapKey=JSON.stringify([key,ledger]);
       if(!groups.has(mapKey)) groups.set(mapKey,{key,ledger,samples:0,tokens:Object.fromEntries(tokenFields.map(k=>[k,0])),missing:Object.fromEntries(tokenFields.map(k=>[k,0])),inventoryValues:Object.fromEntries(tokenFields.map(k=>[k,[]])),estimatedUsd:0,pricedSamples:0,partialPriceSamples:0,pricingReasons:{},actualRequestInputs:[],latestSampleInputs:[],longContextSamples:0,unknownContextSamples:0,discontinuities:0});
       const g=groups.get(mapKey);g.samples++;g.discontinuities+=Number(e.discontinuity);
+      g.turnTotals??=new Map();g.costValues??=[];g.contextWindows??=[];g.collaborationModeCounts??={};g.tierRequestCounts??={fast:0,standard:0,other:0,unknown:0};g.requestCount??=0;g.longContextRequests??=0;g.unknownRequestContext??=0;
+      const mode=e.collaborationMode??'Unknown';g.collaborationModeCounts[mode]=(g.collaborationModeCounts[mode]??0)+1;
+      if(Number.isSafeInteger(e.modelContextWindow)&&e.modelContextWindow>0)g.contextWindows.push(e.modelContextWindow);
+      if(!inventory&&e.turnId) {
+        const identity=JSON.stringify([e.threadId,e.turnId]),turn=g.turnTotals.get(identity)??{total:0,missing:false};
+        if(e.scope==='latest-sample'||e.usage.total_tokens==null)turn.missing=true;else turn.total+=e.usage.total_tokens;
+        g.turnTotals.set(identity,turn);
+      }
       for(const k of tokenFields) { if(e.usage[k]==null)g.missing[k]++;else if(inventory)g.inventoryValues[k].push(e.usage[k]);else g.tokens[k]+=e.usage[k]; }
       const request=e.latestUsage?{...e,usage:e.latestUsage,scope:'latest-sample'}:e;
       const price=inventory?{status:'Unavailable',usd:null,reason:'counter-inventory-is-not-additive-consumption'}:this.pricing.estimate(request);
+      const context=inventory?{context:null}:this.pricing.context(request);
       if(price.status==='Partial') g.partialPriceSamples++;
-      if(price.usd!=null) { g.estimatedUsd+=price.usd;g.pricedSamples++; }
+      if(price.usd!=null) { g.estimatedUsd+=price.usd;g.pricedSamples++;g.costValues.push(price.usd); }
       if(price.reason) g.pricingReasons[price.reason]=(g.pricingReasons[price.reason]??0)+1;
       if(request.scope==='response' && request.responseId && request.usage.input_tokens!=null) g.actualRequestInputs.push(request.usage.input_tokens);
       if(request.scope==='latest-sample' && request.usage.input_tokens!=null) g.latestSampleInputs.push(request.usage.input_tokens);
-      if(price.context==='long') g.longContextSamples++; else if(price.context==null) g.unknownContextSamples++;
+      if(context.context==='long') g.longContextSamples++; else if(context.context==null) g.unknownContextSamples++;
+      if(!inventory&&e.scope==='response'&&e.responseId&&e.provider) {
+        g.requestCount++;const tier=normalizeServiceTier(e.rawServiceTier??e.serviceTier,e.provider);g.tierRequestCounts[tier==='fast'||tier==='standard'?tier:tier&&tier!=='auto'?'other':'unknown']++;
+        if(context.context==='long')g.longContextRequests++;else if(context.context==null)g.unknownRequestContext++;
+      }
     }
     return {groupBy,since,source:'local-session-log',duplicateResponseRecords,coverage:'Observed ledgers only; initial/reset/reordered counters are non-additive inventory. Known-provider response IDs are deduped across threads. Response, counter-delta and latest-sample ledgers overlap and must not be added together; global/root-child consumption is unverified.',groups:[...groups.values()].map(g=>{
       const inputs=g.actualRequestInputs;
       const snapshotsOnly=g.ledger==='latest-sample';
       const inventory=g.ledger==='baseline-counter-inventory';
       const counterInventoryStats=inventory?Object.fromEntries(tokenFields.map(k=>[k,{samples:g.inventoryValues[k].length,max:g.inventoryValues[k].length?Math.max(...g.inventoryValues[k]):null,p50:percentile(g.inventoryValues[k],.5),p95:percentile(g.inventoryValues[k],.95)}])):null;
-      return {...g,tokens:Object.fromEntries(tokenFields.map(k=>[k,snapshotsOnly||inventory||g.missing[k]===g.samples?null:g.tokens[k]])),inventoryValues:undefined,counterInventoryStats,additiveWithinLedger:!snapshotsOnly&&!inventory,canCombineWithOtherLedgers:false,globalConsumptionStatus:'Unavailable: inherited/delegated and overlapping ledger scopes not reconciled',actualRequestInputs:undefined,latestSampleInputs:undefined,countLabel:snapshotsOnly?'Usage samples':inventory?'Non-additive counter snapshots':g.ledger==='response'?'Response records':'Observed counter deltas',contextCountLabel:'Observed context samples; not a unique request count',tokenTotalStatus:inventory?'Non-additive counter inventory; not consumption':snapshotsOnly?'Unavailable: latest snapshots cannot establish an additive ledger':'Observed values within this ledger; global consumption unverified',inputP50:percentile(inputs,.5),inputP95:percentile(inputs,.95),inputSamples:inputs.length,latestSampleInputP50:percentile(g.latestSampleInputs,.5),latestSampleInputP95:percentile(g.latestSampleInputs,.95),latestInputObservations:g.latestSampleInputs.length,cacheHitRatio:snapshotsOnly||inventory||g.missing.cached_input_tokens||g.missing.input_tokens?null:g.tokens.input_tokens?g.tokens.cached_input_tokens/g.tokens.input_tokens:0,pricingStatus:snapshotsOnly?'Unavailable':g.pricedSamples===g.samples&&!g.partialPriceSamples?'Estimated':g.pricedSamples||g.partialPriceSamples?'Partial':'Unavailable',estimatedUsd:snapshotsOnly?null:g.pricedSamples?g.estimatedUsd:null};
+      const statistics={observedTurns:inventory?null:g.turnTotals.size,requestCount:g.ledger==='response'?g.requestCount:null,requestCountQuality:'Unique known-provider response records only; missing response coverage is not inferred',turnTokenStatistics:inventory?null:{...distribution([...g.turnTotals.values()].filter(t=>!t.missing).map(t=>t.total),g.turnTotals.size),quality:'Observed contributions within this ledger; complete-turn consumption is unverified'},averageRequestInput:distribution(inputs).mean,longContextRequests:g.ledger==='response'?g.longContextRequests:null,unknownRequestContext:g.ledger==='response'?g.unknownRequestContext:null,tierRequestCounts:g.ledger==='response'?g.tierRequestCounts:null,tierCountQuality:'Observed metadata; configured turn tiers may not confirm actual served response tiers',configuredContextWindowStatistics:distribution(g.contextWindows,g.samples),estimatedCostStatistics:{...distribution(g.costValues,g.samples),quality:'API-equivalent estimates with per-sample coverage limits'},collaborationModeCounts:g.collaborationModeCounts};
+      return {...g,...statistics,turnTotals:undefined,costValues:undefined,contextWindows:undefined,tokens:Object.fromEntries(tokenFields.map(k=>[k,snapshotsOnly||inventory||g.missing[k]===g.samples?null:g.tokens[k]])),inventoryValues:undefined,counterInventoryStats,additiveWithinLedger:!snapshotsOnly&&!inventory,canCombineWithOtherLedgers:false,globalConsumptionStatus:'Unavailable: inherited/delegated and overlapping ledger scopes not reconciled',actualRequestInputs:undefined,latestSampleInputs:undefined,countLabel:snapshotsOnly?'Usage samples':inventory?'Non-additive counter snapshots':g.ledger==='response'?'Response records':'Observed counter deltas',contextCountLabel:'Observed context samples; not a unique request count',tokenTotalStatus:inventory?'Non-additive counter inventory; not consumption':snapshotsOnly?'Unavailable: latest snapshots cannot establish an additive ledger':'Observed values within this ledger; global consumption unverified',inputP50:percentile(inputs,.5),inputP95:percentile(inputs,.95),inputSamples:inputs.length,latestSampleInputP50:percentile(g.latestSampleInputs,.5),latestSampleInputP95:percentile(g.latestSampleInputs,.95),latestInputObservations:g.latestSampleInputs.length,cacheHitRatio:snapshotsOnly||inventory||g.missing.cached_input_tokens||g.missing.input_tokens?null:g.tokens.input_tokens?g.tokens.cached_input_tokens/g.tokens.input_tokens:0,pricingStatus:snapshotsOnly?'Unavailable':g.pricedSamples===g.samples&&!g.partialPriceSamples?'Estimated':g.pricedSamples||g.partialPriceSamples?'Partial':'Unavailable',estimatedUsd:snapshotsOnly?null:g.pricedSamples?g.estimatedUsd:null};
     })};
   }
   performanceSummary({since=0}={}) {
@@ -96,7 +112,7 @@ export class ObservabilityService {
     return {confidence:'low',label:'Empirical co-occurrence; no official quota-token conversion or thread attribution',buckets:rows,correlations};
   }
   pricingSnapshots() { return this.pricing.snapshots(); }
-  diagnostics() { return {adapter:'SessionLogAdapter/v1',source:'local sessions/archived_sessions',lastPoll:this.store.getSetting('observability:last-poll'),usageRecords:this.store.db.prepare('SELECT count(*) AS n FROM token_usage').get().n,performanceRecords:this.store.db.prepare('SELECT count(*) AS n FROM performance_samples').get().n,pricingSnapshotIds:this.pricingSnapshots().map(p=>p.id),privacy:'No prompts, messages, tool arguments, auth or complete sessions stored',databaseSchema:1}; }
+  diagnostics() { return {adapter:'SessionLogAdapter/v1',source:'local sessions/archived_sessions',lastPoll:this.store.getSetting('observability:last-poll'),usageRecords:this.store.db.prepare('SELECT count(*) AS n FROM token_usage').get().n,performanceRecords:this.store.db.prepare('SELECT count(*) AS n FROM performance_samples').get().n,pricingSnapshotIds:this.pricingSnapshots().map(p=>p.id),privacy:'No prompts, messages, tool arguments, auth or complete sessions stored',databaseSchema:this.store.schemaVersion??this.store.db.prepare('PRAGMA user_version').get().user_version}; }
   exportDiagnostics() {
     const d=this.diagnostics();
     return {schemaVersion:1,adapter:d.adapter,source:d.source,lastPoll:d.lastPoll,usageRecords:d.usageRecords,performanceRecords:d.performanceRecords,pricingSnapshotCount:d.pricingSnapshotIds.length,databaseSchema:d.databaseSchema,privacy:d.privacy};

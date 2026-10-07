@@ -7,7 +7,7 @@ $taskPrincipal=[string]$taskEntry.Principal.UserId
 try {if($taskPrincipal -match '^S-1-'){ $taskPrincipalSid=$taskPrincipal }else{$taskPrincipalSid=(New-Object Security.Principal.NTAccount($taskPrincipal)).Translate([Security.Principal.SecurityIdentifier]).Value}}catch{$taskPrincipalSid='unknown'}
 $taskOwned=$taskEntry.Description.StartsWith('Codex Control Center local execution core ') -and $taskPrincipalSid -eq $taskCurrentSid -and @($taskEntry.Actions | Where-Object {$_.Arguments -match 'codex-control-center|CodexControlCenter|core-cli[.]mjs'}).Count -gt 0
 if(-not $taskOwned){throw 'same-name-autostart-task-is-not-owned'}
-$taskEnabled=$taskEntry.State -ne 'Disabled'
+$taskEnabled=[bool]$taskEntry.Settings.Enabled
 if($Mode -eq 'Disable' -and $taskEnabled){
  if(-not $BackupDirectory -or -not [IO.Path]::IsPathRooted($BackupDirectory)){throw 'absolute-owned-backup-directory-required'}
  [IO.Directory]::CreateDirectory($BackupDirectory)|Out-Null

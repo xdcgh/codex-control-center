@@ -13,6 +13,7 @@ import { resolveOwnerAnchor,inspectOwnerLease } from './core/ownership.mjs';
 import { brokerRequest } from './core/broker-client.mjs';
 import { NaturalCycleRecorder } from './observability/natural-cycle.mjs';
 import { backfillAutomaticRecoveryEvents } from './core/natural-backfill.mjs';
+import { recoverOffline } from './core/offline-recovery.mjs';
 
 const args = process.argv.slice(2), command = args[0] ?? 'doctor';
 const argument = key => { const i = args.indexOf(key); return i < 0 ? null : args[i+1]; };
@@ -28,9 +29,13 @@ try {
   const config = JSON.parse(fs.readFileSync(configPath,'utf8'));
   if (![config.codexBin, config.codexHome, config.asarPath, config.stateDirectory].every(p => typeof p === 'string' && path.isAbsolute(p))) throw new Error('invalid-core-config');
   const ownerDescriptor=path.join(config.stateDirectory,'broker','owner.json');
-  if(['status','history','doctor','shutdown','natural-report'].includes(command)&&fs.existsSync(ownerDescriptor)){
-    const method={status:'snapshot',history:'quota/history',doctor:'doctor',shutdown:'shutdown','natural-report':'natural/report'}[command];
-    output(await brokerRequest(config.stateDirectory,method,{...(command==='doctor'&&argument('--thread')?{threadId:argument('--thread')}:{ }),...(command==='history'?{since:Number(argument('--since')??0)}:{})}));
+  if(command==='database-recover'){if(!argument('--backup'))throw new Error('database-recovery-backup-required');output(recoverOffline({config,backupFile:argument('--backup'),confirmed:args.includes('--confirm')}));}
+  else if(['status','history','doctor','shutdown','natural-report','pricing-snapshots','pricing-check','pricing-override','database-backup','database-acknowledge'].includes(command)&&fs.existsSync(ownerDescriptor)){
+    const method={status:'snapshot',history:'quota/history',doctor:'doctor',shutdown:'shutdown','natural-report':'natural/report','pricing-snapshots':'pricing/snapshots','pricing-check':'pricing/check','pricing-override':'pricing/override','database-backup':'database/backup','database-acknowledge':'database/acknowledge'}[command];
+    const params={...(['doctor','natural-report','database-acknowledge'].includes(command)&&argument('--thread')?{threadId:argument('--thread')}:{ }),...(command==='history'?{since:Number(argument('--since')??0)}:{})};
+    if(command==='database-backup')params.destination=argument('--destination');if(command==='database-acknowledge')params.confirmed=args.includes('--confirm');
+    if(command==='pricing-override'){if(!argument('--policy'))throw new Error('pricing-policy-file-required');params.policy=JSON.parse(fs.readFileSync(argument('--policy'),'utf8'));params.confirmed=args.includes('--confirm');}
+    output(await brokerRequest(config.stateDirectory,method,params));
   } else {
   adapter = new CodexAdapter(config);
   if (command === 'doctor') output(await adapter.doctor({ threadId: argument('--thread') }));
@@ -50,6 +55,7 @@ try {
       const finish = () => { stop = true; core.stopped = true; };
       process.on('SIGINT',finish); process.on('SIGTERM',finish);
       observability=new ObservabilityClient({database:path.join(config.stateDirectory,'control-center.sqlite'),codexHome:config.codexHome});
+      core.observability=observability;
       const route=createRouter({core,store,adapter,observability,recorder,shutdown:finish});
       const nativeBin=process.env.CODEX_CONTROL_CENTER_BROKER_HELPER??config.nativeBrokerBin;
       if(args.includes('--execute')&&!nativeBin)throw new Error('native-broker-helper-required-for-execution');

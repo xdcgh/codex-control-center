@@ -11,9 +11,10 @@ export function validateSettings(value) {
 const defaults = s => ({ autoResume: true, allowAutomaticStart: true, neverAutoResume: false, manualPaused: false, priority: 2, order: 0, maxRetries: s.maxRetries, cooldownSeconds: s.cooldownSeconds, retryCount: 0, nextAttemptAt: 0 });
 
 export class ControlCenterCore {
-  constructor({ adapter, store, settings = {}, now = Date.now, execute = false,recorder }) {
+  constructor({ adapter, store, settings = {}, now = Date.now, execute = false,recorder,observability }) {
     Object.assign(this, { adapter, store, now, execute });
     this.recorder=recorder;
+    this.observability=observability;
     this.settings = validateSettings(store.getSetting('core-settings', settings));
     store.setSetting('core-settings',this.settings);
     this.nextQuotaPollAt = 0; this.nextScanAt = 0; this.polling = null; this.nextHistorySampleAt = store.getSetting('next-history-sample-at', 0); this.nextCompatibilityAt = 0;
@@ -23,7 +24,7 @@ export class ControlCenterCore {
     if (typeof adapter.desktop.getGeneration === 'function') desktop.getGeneration = id => adapter.desktop.getGeneration(id);
     const account={request:async(method,params)=>{const result=await adapter.account.request(method,params);if(method==='account/rateLimits/read')this.recorder?.onQuota(result,this.now(),adapter.source);return result;}};
     this.engine = new WatchdogEngine({ store, desktop, account, now, execute, quotaProbeMode: 'live', resetBufferMs: 0, continuationText: CONTINUATION_TEXT,
-      enabled: id => !this.stopped && adapter.compatibility.verified && (this.manualResumes.has(id)||(this.settings.autoResume&&(!id||this.threadEnabled(id)))),
+      enabled: id => !this.stopped && !this.requiresRecoveryReview() && adapter.compatibility.verified && (this.manualResumes.has(id)||(this.settings.autoResume&&(!id||this.threadEnabled(id)))),
       enrollmentSince: () => this.enrollmentSince,
       verifyDesktop: () => adapter.verifyWriteSafety(), log: (event, details) => {
         store.event(event,details);
@@ -35,18 +36,22 @@ export class ControlCenterCore {
     if (this.settings.autoResume) store.setSetting('enrollment-since', this.enrollmentSince);
   }
   setSettings(update) {
+    if(update?.autoResume===true&&this.requiresRecoveryReview())throw new Error('database-recovery-review-required');
     const next = validateSettings({ ...this.settings, ...update });
     if (!this.settings.autoResume && next.autoResume) { this.enrollmentSince = this.now(); this.store.setSetting('enrollment-since', this.enrollmentSince); }
     this.settings = next; this.store.setSetting('core-settings', next); this.nextQuotaPollAt = Math.min(this.nextQuotaPollAt, this.now()); return this.snapshot();
   }
   policy(id) { return { ...defaults(this.settings), ...this.store.getThreadPolicy(id) }; }
+  requiresRecoveryReview(){return this.store.getSetting('database-recovery',{})?.requiresReview===true;}
   threadEnabled(id) { const p=this.policy(id); return p.autoResume && p.allowAutomaticStart && !p.manualPaused && !p.neverAutoResume; }
   assertThreadEnabled(id) {
+    if(this.requiresRecoveryReview())throw new Error('database-recovery-review-required');
     const p = this.policy(id);
     if(this.manualResumes.has(id)&&!this.stopped)return;
     if (!this.settings.autoResume || p.manualPaused || p.neverAutoResume || !p.autoResume || !p.allowAutomaticStart || this.stopped) throw new Error('thread-auto-resume-disabled');
   }
   setThreadPolicy(id, update) {
+    if(update?.autoResume===true&&this.requiresRecoveryReview())throw new Error('database-recovery-review-required');
     if (!isUuid(id)) throw new Error('invalid-thread-id');
     const allowed = ['autoResume','allowAutomaticStart','neverAutoResume','manualPaused','priority','order','maxRetries','cooldownSeconds'];
     if (Object.keys(update).some(k => !allowed.includes(k))) throw new Error('unknown-thread-policy-field');
@@ -124,12 +129,23 @@ export class ControlCenterCore {
           }
           this.recorder?.onThread({threadId:id,snapshot:state,decision,record,intent:this.engine.state.ledger[record?.attemptKey],observedAt:this.now(),source:this.adapter.source==='official-app-server'?'desktop-ipc':this.adapter.source,versions:{cliVersion:this.adapter.compatibility.cliVersion,desktopVersion:this.adapter.compatibility.desktopVersion}});
           if(record) {
-            record.title=typeof state.title==='string'?state.title:null;
+            record.title=typeof state.title==='string'?state.title:typeof state.threadTitle==='string'?state.threadTitle:null;
             record.workspace=typeof state.cwd==='string'?state.cwd:null;
             record.modelId=state.latestModel??null;record.reasoningEffort=state.latestReasoningEffort??null;
             record.serviceTier=state.latestThreadSettings?.serviceTier??null;record.lastActivityAt=this.now();
+            record.repository=typeof state.gitInfo?.originUrl==='string'?state.gitInfo.originUrl:null;
+            record.currentTurnId=turn?.turnId??null;record.currentTurnStatus=turn?.status??null;
+            record.turnStartedAt=Number.isFinite(turn?.turnStartedAtMs)?turn.turnStartedAtMs:null;
+            record.turnEndedAt=Number.isFinite(turn?.turnEndedAtMs)?turn.turnEndedAtMs:null;
+            record.runtimeType=state.threadRuntimeStatus?.type??null;
+            record.runtimeFlags=Array.isArray(state.threadRuntimeStatus?.activeFlags)?state.threadRuntimeStatus.activeFlags.filter(flag=>typeof flag==='string'):[];
+            record.collaborationMode=typeof state.latestCollaborationMode?.mode==='string'?state.latestCollaborationMode.mode:null;
+            record.modelContextWindow=Number.isFinite(state.modelContextWindow)?state.modelContextWindow:null;
+            record.quotaAttribution={status:'Unavailable',reason:'Subscription quota changes cannot be reliably assigned to a concurrent thread'};
+            record.metadataSource='verified-desktop-ipc';
             delete record.unavailableReason;
           }
+          if(this.observability&&turn?.turnId){void this.observability.call('observe-turn',{threadId:id,turnId:turn.turnId,model:typeof state.latestModel==='string'?state.latestModel:undefined,rawServiceTier:turn.params?.serviceTier??state.latestThreadSettings?.serviceTier,effort:state.latestReasoningEffort,observedAt:this.now(),source:this.adapter.source==='official-app-server'?'desktop-ipc':this.adapter.source}).catch(()=>{});}
           if (record && decision.action === 'wait' && ['approval-or-input-pending','user-message-pending','goal-user-confirmation'].includes(decision.reason)) { this.engine.transition(record,'needsUser',decision.reason); }
         } catch (error) {
           if (!['no-client-found','desktop-snapshot-timeout','desktop-read-compatibility-unverified'].includes(error.message)) throw error;
@@ -190,9 +206,9 @@ export class ControlCenterCore {
     } finally { this.active.delete(record.threadId); this.adapter.unfollow?.(record.threadId); }
   }
   snapshot() {
-    return { mode: this.execute ? 'execute' : 'observe', settings: this.settings, compatibility: this.adapter.compatibility, quota: this.quota,
+    return { mode: this.execute ? 'execute' : 'observe', settings: this.settings, compatibility: this.adapter.compatibility, quota: this.quota,adapter:this.adapter.source,database:{schemaVersion:this.store.db?.prepare('PRAGMA user_version').get().user_version??null,recovery:this.store.getSetting('database-recovery',{}),requiresReview:this.requiresRecoveryReview()},
       lastQuotaPollAt: this.lastQuotaPollAt, nextQuotaPollAt: this.nextQuotaPollAt, nextHistorySampleAt: this.nextHistorySampleAt, lastError: this.lastError,
-      tasks: Object.values(this.engine.state.records).map(r => ({ ...r, policy: this.policy(r.threadId) })), activeResumes: this.active.size };
+      tasks: Object.values(this.engine.state.records).map(r => ({ ...r, policy: this.policy(r.threadId),nextRecoveryCheckAt:this.nextQuotaPollAt,tokenUsage:{status:'Available through separate observed analytics ledgers; not a reconciled global consumption total',source:'local-session-log'} })), activeResumes: this.active.size };
   }
   occupiedThreads() {
     const occupied=new Set(Object.values(this.engine.state.records).filter(r=>r.phase==='watching'&&['running','continuation-accepted','new-turn-observed','goal-between-turns'].includes(r.reason)).map(r=>r.threadId));
@@ -202,6 +218,7 @@ export class ControlCenterCore {
     return occupied;
   }
   async resumeNow(id) {
+    if(this.requiresRecoveryReview())throw new Error('database-recovery-review-required');
     if(!isUuid(id))throw new Error('invalid-thread-id');
     this.recorder?.onManualAction({threadId:id,action:'resume-now',observedAt:this.now()});
     if(!this.execute)throw new Error('observe-mode-cannot-resume');

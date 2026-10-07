@@ -56,9 +56,9 @@ export class SessionLogAdapter {
   }
   consume(event,meta,result) {
     const p=event.payload ?? {}, timestamp=Date.parse(event.timestamp);
-    if (event.type==='session_meta') { meta.threadId=scalar(p.id); meta.workspace=scalar(p.cwd); meta.provider=scalar(p.model_provider);meta.parentThreadId=scalar(p.parent_thread_id);meta.forkedHistory=!!(p.forked_from_id??p.forked_from); return; }
+    if (event.type==='session_meta') { meta.threadId=scalar(p.id); meta.workspace=scalar(p.cwd); meta.provider=scalar(p.model_provider);meta.parentThreadId=scalar(p.parent_thread_id);meta.forkedHistory=!!(p.forked_from_id??p.forked_from);meta.modelContextWindow=Number.isSafeInteger(p.context_window)&&p.context_window>0?p.context_window:null; return; }
     if (event.type==='turn_context') {
-      meta.turnId=scalar(p.turn_id); meta.model=scalar(p.model); meta.effort=scalar(p.effort ?? p.reasoning_effort); meta.serviceTier=scalar(p.service_tier); meta.provider=scalar(p.model_provider) ?? meta.provider; meta.workspace=scalar(p.cwd) ?? meta.workspace; meta.goalId=scalar(p.goal_id);
+      meta.turnId=scalar(p.turn_id); meta.model=scalar(p.model); meta.effort=scalar(p.effort ?? p.reasoning_effort); meta.serviceTier=scalar(p.service_tier); meta.provider=scalar(p.model_provider) ?? meta.provider; meta.workspace=scalar(p.cwd) ?? meta.workspace; meta.goalId=scalar(p.goal_id);meta.collaborationMode=scalar(p.collaboration_mode?.mode);meta.rootTurnId=scalar(p.root_turn_id);
       if(meta.threadId && meta.turnId) this.store.db.prepare('INSERT OR REPLACE INTO turns VALUES(?,?,?)').run(meta.turnId,meta.threadId,JSON.stringify({...meta,timestamp:Number.isFinite(timestamp)?timestamp:null})); return;
     }
     if (!meta.threadId || !Number.isFinite(timestamp)) return;
@@ -67,7 +67,7 @@ export class SessionLogAdapter {
     const history=this.store.getSetting('observability:turn-metadata:'+digest([meta.threadId,turnId]),[]);
     const observed=history.filter(m=>m.observedAt<=timestamp).at(-1)?.metadata;
     const provider=scalar(p.model_provider)??meta.provider??observed?.provider??null,loggedTier=scalar(p.service_tier)??meta.serviceTier??null,rawServiceTier=loggedTier??observed?.rawServiceTier??null;
-    const base={threadId:meta.threadId,turnId,rootTurnId:scalar(p.root_turn_id),parentThreadId:meta.parentThreadId??null,forkedHistory:!!meta.forkedHistory,model:scalar(p.model)??meta.model??observed?.model??null,provider,rawServiceTier,serviceTier:normalizeServiceTier(rawServiceTier,provider),tierEvidence:loggedTier?'session-log-field':rawServiceTier?'observed-turn-settings':null,effort:meta.effort??observed?.effort??null,workspace:meta.workspace??null,goalId:meta.goalId??null,timestamp,source:'local-session-log'};
+    const base={threadId:meta.threadId,turnId,rootTurnId:scalar(p.root_turn_id)??meta.rootTurnId??null,parentThreadId:meta.parentThreadId??null,forkedHistory:!!meta.forkedHistory,collaborationMode:meta.collaborationMode??observed?.collaborationMode??null,model:scalar(p.model)??meta.model??observed?.model??null,provider,rawServiceTier,serviceTier:normalizeServiceTier(rawServiceTier,provider),tierEvidence:loggedTier?'session-log-field':rawServiceTier?'observed-turn-settings':null,effort:meta.effort??observed?.effort??null,workspace:meta.workspace??null,goalId:meta.goalId??null,kind:meta.goalId?'goal':observed?.kind??null,turnStartedAtMs:observed?.turnStartedAtMs??null,turnCompletedAtMs:observed?.turnCompletedAtMs??null,timestamp,source:'local-session-log'};
     if (type==='token_count' || type==='token_usage' || type==='token_usage_record') {
       const info=p.info ?? p, responseId=scalar(p.response_id ?? info.response_id), id=digest({thread:meta.threadId,responseId,event:responseId?null:event});
       if(this.store.db.prepare('SELECT 1 FROM token_usage WHERE id=?').get(id)) return;
@@ -89,7 +89,7 @@ export class SessionLogAdapter {
       // Repeated cumulative snapshots are retained for provenance but cannot become
       // another billable/latest-request sample when no token counter advanced.
       const advanced=usage.input_tokens>0 || usage.output_tokens>0;
-      const record={...base,usage,scope,responseId,latestUsage:advanced?latest:null,discontinuity,initialCounter,outOfOrder,additiveWithinCounterEpoch:scope==='cumulative-delta',attribution:scope==='counter-snapshot'?'non-additive counter inventory; inherited or replayed history possible':'observed-event-metadata; root/child rollup not proven',consistency:usage.total_tokens!=null && usage.input_tokens!=null && usage.output_tokens!=null && usage.total_tokens!==usage.input_tokens+usage.output_tokens?'total-mismatch':null};
+      const record={...base,usage,scope,responseId,modelContextWindow:Number.isSafeInteger(info.model_context_window)&&info.model_context_window>0?info.model_context_window:meta.modelContextWindow??observed?.modelContextWindow??null,latestUsage:advanced?latest:null,discontinuity,initialCounter,outOfOrder,additiveWithinCounterEpoch:scope==='cumulative-delta',attribution:scope==='counter-snapshot'?'non-additive counter inventory; inherited or replayed history possible':'observed-event-metadata; root/child rollup not proven',consistency:usage.total_tokens!=null && usage.input_tokens!=null && usage.output_tokens!=null && usage.total_tokens!==usage.input_tokens+usage.output_tokens?'total-mismatch':null};
       result.usage+=insert(this.store,'token_usage',id,record,meta.threadId,base.turnId);
       if(responseId) insert(this.store,'model_calls',id,record);
       return;
