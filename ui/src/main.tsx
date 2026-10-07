@@ -12,6 +12,9 @@ type WindowQuota = {
   resetsAt: number | null;
 };
 type Policy = {
+  allowAutomaticStart: boolean;
+  cooldownSeconds: number;
+  order: number;
   autoResume: boolean;
   manualPaused: boolean;
   neverAutoResume: boolean;
@@ -111,6 +114,11 @@ const phases: Record<string, string> = {
   dispatching: "Resuming",
 };
 function status(task: Task) {
+  if(task.reason==='goal-paused'||task.reason==='manually-interrupted')return 'Manual paused';
+  if(task.reason==='non-quota-error')return 'Error';
+  if(task.reason==='goal-user-confirmation')return 'Needs user';
+  if(task.reason==='goal-complete'||task.reason==='goal-completed')return 'Completed';
+  if(task.phase==='watching'&&['runtime-waiting','goal-between-turns','desktop-loading','latest-turn-unavailable'].includes(task.reason))return 'Waiting';
   if (task.phase === "inactive" && task.reason === "completed")
     return "Completed";
   return phases[task.phase] ?? task.phase;
@@ -151,7 +159,7 @@ function App() {
       .catch((e) => setError(String(e)));
     void request<Snapshot>("snapshot")
       .then(setSnapshot)
-      .catch((e) => setError(String(e)));
+      .catch((e) => {setError(String(e));setPage('Diagnostics');});
     const registrations = [
       listen<Snapshot>("core/snapshot", (event) => {
         setSnapshot(event.payload);
@@ -628,7 +636,7 @@ function ThreadList({
             <h3>
               {prefs?.privacy
                 ? "Private task"
-                : (task.title ?? "Untitled thread")}
+                : (task.title ?? "Title unavailable")}
               <span className="kind">
                 {task.kind === "goal" ? "Goal" : "Thread"}
               </span>
@@ -648,7 +656,7 @@ function ThreadList({
             </span>
             {!compact && (
               <p className="caption">
-                Last activity {time(task.lastActivityAt)} · Retries{" "}
+                Last observed {time(task.lastActivityAt)} · Retries{" "}
                 {task.policy.retryCount}/{task.policy.maxRetries} ·{" "}
                 {task.reason}
               </p>
@@ -663,9 +671,7 @@ function ThreadList({
             {!compact && (
               <>
                 <span className="quality">
-                  {task.policy.manualPaused
-                    ? "Automatic recovery paused"
-                    : "Automatic recovery allowed"}
+                  {task.policy.neverAutoResume?'Automatic recovery forbidden':task.policy.manualPaused?'Automatic recovery paused':!task.policy.autoResume?'Automatic recovery off':!task.policy.allowAutomaticStart?'Automatic starts blocked':'Automatic recovery allowed'}
                 </span>
                 <select
                   aria-label="Priority"
@@ -743,6 +749,7 @@ function ThreadList({
                     {task.policy.neverAutoResume ? "Allow auto" : "Never auto"}
                   </button>
                 </div>
+                <details className="thread-policy-details"><summary>Recovery policy</summary><label>Allow automatic start <input type="checkbox" checked={task.policy.allowAutomaticStart} onChange={e=>void action(()=>request('thread/policy',{threadId:task.threadId,update:{allowAutomaticStart:e.target.checked}}))}/></label><label>Max retries <input type="number" min="1" defaultValue={task.policy.maxRetries} onBlur={e=>void action(()=>request('thread/policy',{threadId:task.threadId,update:{maxRetries:Number(e.target.value)}}))}/></label><label>Cooldown seconds <input type="number" min="0" defaultValue={task.policy.cooldownSeconds} onBlur={e=>void action(()=>request('thread/policy',{threadId:task.threadId,update:{cooldownSeconds:Number(e.target.value)}}))}/></label><label>Queue order <input type="number" defaultValue={task.policy.order} onBlur={e=>void action(()=>request('thread/policy',{threadId:task.threadId,update:{order:Number(e.target.value)}}))}/></label></details>
               </>
             )}
           </div>

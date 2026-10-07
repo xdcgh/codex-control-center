@@ -9,7 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 mod pipe_helper;
 mod config_binding;
 
-struct Service { config: PathBuf, preferences: Mutex<Value>, preferences_file: PathBuf }
+struct Service { config: PathBuf, preferences: Mutex<Value>, preferences_file: PathBuf,startup_error:Option<String> }
 
 fn core_assets(app:&tauri::AppHandle)->Result<(PathBuf,PathBuf),String>{
  let resources=app.path().resource_dir().map_err(|_|"resources-unavailable")?;let mut node=resources.join("node.exe");let mut source=resources.join("core/src");
@@ -39,7 +39,7 @@ fn discover_config(app: &tauri::AppHandle) -> Result<PathBuf,String> {
     if command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map_err(|_|"configuration-discovery-failed")?.success(){config_binding::establish(&profile,&local)?;Ok(local)}else{Err("Open Codex Desktop and sign in, then restart.".into())}
 }
 
-fn config_value(service:&Service)->Result<Value,String>{serde_json::from_slice(&fs::read(&service.config).map_err(|_|"configuration-unavailable")?).map_err(|_|"configuration-invalid".into())}
+fn config_value(service:&Service)->Result<Value,String>{if let Some(reason)=&service.startup_error{return Err(reason.clone());}serde_json::from_slice(&fs::read(&service.config).map_err(|_|"configuration-unavailable")?).map_err(|_|"configuration-invalid".into())}
 
 async fn request(service:&Service,method:&str,params:Value)->Result<Value,String>{
     let config=config_value(service)?;
@@ -100,8 +100,8 @@ async fn core_request(app:tauri::AppHandle,method:String,params:Option<Value>)->
 fn ui_preferences(app:tauri::AppHandle,update:Option<Value>)->Result<Value,String>{
  let service=app.state::<Service>();let mut prefs=service.preferences.lock().map_err(|_|"preferences-lock-failed")?;
  if let Some(value)=update {let object=value.as_object().ok_or("invalid-preferences")?;let current=prefs.as_object_mut().ok_or("invalid-preferences")?;for(key,value)in object{if !["theme","privacy","widgetExpanded","widgetLocked","widgetOpacity","widgetPinned","notifications","widgetVisible"].contains(&key.as_str()){return Err("unknown-preference".into());}current.insert(key.clone(),value.clone());}
- fs::create_dir_all(service.preferences_file.parent().ok_or("preferences-parent-missing")?).map_err(|_|"preferences-save-failed")?;
- fs::write(&service.preferences_file,serde_json::to_vec_pretty(&*prefs).map_err(|_|"preferences-invalid")?).map_err(|_|"preferences-save-failed")?;
+ if !service.preferences_file.as_os_str().is_empty(){fs::create_dir_all(service.preferences_file.parent().ok_or("preferences-parent-missing")?).map_err(|_|"preferences-save-failed")?;
+ fs::write(&service.preferences_file,serde_json::to_vec_pretty(&*prefs).map_err(|_|"preferences-invalid")?).map_err(|_|"preferences-save-failed")?;}
  if let Some(window)=app.get_webview_window("widget"){let _=window.set_always_on_top(prefs["widgetPinned"].as_bool().unwrap_or(true));}
  let _=app.emit("preferences/updated",prefs.clone()); }
  Ok(prefs.clone())
@@ -124,6 +124,24 @@ fn save_diagnostics(app:tauri::AppHandle,value:Value)->Result<String,String>{
 }
 
 fn show(app:&tauri::AppHandle,label:&str,page:Option<&str>){if let Some(window)=app.get_webview_window(label){let _=window.show();let _=window.set_focus();if let Some(page)=page{let _=window.emit("navigate",page);}}}
+
+fn restore_visible_windows(app:&tauri::AppHandle){
+ for label in ["main","widget","compact"]{
+  if let Some(window)=app.get_webview_window(label){
+   if let (Ok(position),Ok(monitors))=(window.outer_position(),window.available_monitors()){
+     let on_screen=monitors.iter().any(|m|{let p=m.position();let size=m.size();position.x+48>p.x&&position.y+24>p.y&&position.x<p.x+size.width as i32-24&&position.y<p.y+size.height as i32-24});
+     if !on_screen{let _=window.center();}
+   }
+   if let (Ok(size),Ok(Some(monitor)))=(window.outer_size(),window.current_monitor()){
+     let display=monitor.size();if size.width>display.width.saturating_sub(48)||size.height>display.height.saturating_sub(80){let _=window.set_size(tauri::PhysicalSize::new(size.width.min(display.width.saturating_sub(64)),size.height.min(display.height.saturating_sub(96))));}
+   }
+  }
+ }
+ let state=app.state::<Service>();if let Ok(prefs)=state.preferences.lock(){
+  if prefs["widgetVisible"]==true{if let Some(window)=app.get_webview_window("widget"){let _=window.show();}}
+  for window in app.webview_windows().values(){let _=window.set_theme(Some(if prefs["theme"]=="light"{tauri::Theme::Light}else{tauri::Theme::Dark}));}
+ };
+}
 
 fn tray(app:&tauri::AppHandle)->Result<(),Box<dyn std::error::Error>>{
  let quota5=MenuItem::with_id(app,"quota5","5h: unavailable",false,None::<&str>)?;
@@ -173,9 +191,11 @@ fn main(){
  .invoke_handler(tauri::generate_handler![core_request,ui_preferences,show_window,set_autostart,get_autostart,save_diagnostics])
  .on_window_event(|window,event|{if let tauri::WindowEvent::CloseRequested{api,..}=event{api.prevent_close();let _=window.hide();}})
  .setup(|app|{
-    let handle=app.handle().clone();let config=discover_config(&handle)?;let preferences_file=app.path().app_local_data_dir()?.join("ui-settings.json");
+    let handle=app.handle().clone();let discovery=discover_config(&handle);let startup_error=discovery.as_ref().err().cloned();let config=discovery.unwrap_or_default();
+    let preferences_file=owner_anchor(&handle).ok().and_then(|anchor|anchor.parent().map(|p|p.join("ui-settings.json"))).unwrap_or_default();
     let preferences=fs::read(&preferences_file).ok().and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or(json!({"theme":"dark","privacy":false,"widgetExpanded":false,"widgetLocked":false,"widgetOpacity":0.95,"widgetPinned":true,"notifications":true,"widgetVisible":false}));
-    app.manage(Service{config,preferences:Mutex::new(preferences),preferences_file});
+    app.manage(Service{config,preferences:Mutex::new(preferences),preferences_file,startup_error});
+    restore_visible_windows(&handle);
     if std::env::args().any(|arg|arg=="--enable-autostart"){let _=app.autolaunch().enable();}
     if std::env::args().any(|arg|arg=="--background"){if let Some(window)=app.get_webview_window("main"){let _=window.hide();}}
     tray(&handle)?;
