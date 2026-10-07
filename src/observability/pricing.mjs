@@ -2,6 +2,11 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 
 export const digest = value => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
+export function normalizeServiceTier(raw,provider) {
+  if(provider==='openai'&&raw==='default') return 'standard';
+  if(provider==='openai'&&raw==='priority') return 'fast';
+  return raw??null;
+}
 const fields = ['input', 'cached', 'write', 'output'];
 export function validatePricing(policy) {
   if (policy?.schemaVersion !== 1 || typeof policy.id !== 'string' || !Number.isFinite(Date.parse(policy.retrievedAt)) || !Array.isArray(policy.rows)) throw new Error('invalid-pricing-schema');
@@ -37,8 +42,8 @@ export class PricingPolicy {
     const policy = this.snapshots().reverse().filter(p => Date.parse(p.effectiveFrom ?? p.retrievedAt) <= timestamp).sort((a,b) => Date.parse(b.effectiveFrom ?? b.retrievedAt)-Date.parse(a.effectiveFrom ?? a.retrievedAt))[0];
     if (!policy) return unavailable('historical-price-not-established');
     if (!event.provider) return unavailable('provider-missing');
-    if (!event.serviceTier) return unavailable('processing-tier-missing');
-    const tier = event.serviceTier === 'priority' ? 'fast' : event.serviceTier;
+    if (!(event.rawServiceTier??event.serviceTier)) return unavailable('processing-tier-missing');
+    const tier = normalizeServiceTier(event.rawServiceTier??event.serviceTier,event.provider);
     const row = policy.rows.find(r => r.model === event.model && r.provider === event.provider && r.tier === tier);
     if (!row) return unavailable('model-provider-tier-price-missing');
     if (event.scope !== 'response' && event.scope !== 'latest-sample') return unavailable('individual-request-input-unavailable');
@@ -51,7 +56,8 @@ export class PricingPolicy {
     if ([input,cached,write,u.output_tokens].some(n => !Number.isSafeInteger(n) || n < 0) || (u.reasoning_output_tokens != null && u.reasoning_output_tokens > u.output_tokens) || (u.total_tokens != null && u.total_tokens !== u.input_tokens+u.output_tokens)) return unavailable('inconsistent-token-categories');
     if (fields.some(f => rates[f] == null)) return unavailable('rate-missing');
     if (event.region || event.fedramp) return unavailable('regional-adjustment-not-established');
-    return { status: event.scope === 'latest-sample' ? 'Partial' : 'Estimated', reason: event.scope === 'latest-sample' ? 'latest-sample-only-coverage' : null, usd: (input*rates.input+cached*rates.cached+write*rates.write+u.output_tokens*rates.output)/1e6, snapshotId: policy.id, context: long ? 'long' : 'short', label: 'API-equivalent estimate; not a subscription bill' };
+    const partial=event.scope==='latest-sample'||event.tierEvidence==='observed-turn-settings';
+    return { status: partial ? 'Partial' : 'Estimated', reason: event.scope === 'latest-sample' ? 'latest-sample-only-coverage' : event.tierEvidence==='observed-turn-settings'?'configured-turn-tier-not-response-confirmed':null, usd: (input*rates.input+cached*rates.cached+write*rates.write+u.output_tokens*rates.output)/1e6, snapshotId: policy.id, context: long ? 'long' : 'short', label: 'API-equivalent estimate; not a subscription bill' };
   }
   async checkOfficialUpdate({ fetchImpl = fetch, source = 'https://developers.openai.com/api/docs/pricing.md' } = {}) {
     const url = new URL(source);

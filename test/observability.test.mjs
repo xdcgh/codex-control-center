@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SqliteStore } from '../src/persistence/sqlite.mjs';
-import { ObservabilityService, PricingPolicy, validatePricing, unionDuration } from '../src/observability/index.mjs';
+import { ObservabilityService, PricingPolicy, validatePricing, unionDuration, normalizeServiceTier } from '../src/observability/index.mjs';
 const time='2026-10-07T12:00:00Z';
 const usage=(input=100,output=20)=>({input_tokens:input,cached_input_tokens:10,cache_write_input_tokens:0,output_tokens:output,reasoning_output_tokens:5,total_tokens:input+output});
 const event=(type,payload)=>JSON.stringify({timestamp:time,type,payload})+'\n';
@@ -87,4 +87,20 @@ test('quota correlation is empirical, excludes initial baseline, and needs align
     store.sampleQuota({rateLimits:{primary:{usedPercent:10+i,windowDurationMins:300}}},Date.parse(timestamp)+1000,'fixture');
   }
   service.poll();const result=service.quotaCorrelation();assert.equal(result.confidence,'low');assert.equal(result.buckets[0].tokenTotal,null);assert.equal(result.correlations[0].samples,3);assert.equal(result.correlations[0].pearson,1);assert.ok(result.label.includes('no official'));
+});
+test('actual top-level usage record envelope and missing cache counts remain truthful',t=>{
+  const {service,file}=fixture(t);const u={...usage(),cache_write_input_tokens:undefined};
+  fs.appendFileSync(file,event('token_usage_record',{thread_id:'thread-1',turn_id:'turn-1',response_id:'actual-envelope',root_turn_id:'root-id',session_id:'session-id',usage:u,turn_token_usage:u,thread_token_usage:u}));service.poll();
+  const g=service.summary().groups[0];assert.equal(g.ledger,'response');assert.equal(g.tokens.input_tokens,100);assert.equal(g.tokens.cache_write_input_tokens,null);assert.equal(g.missing.cache_write_input_tokens,1);assert.equal(g.pricingStatus,'Partial');assert.equal(g.estimatedUsd,null);
+});
+test('explicit OpenAI default normalizes to Standard while unknown or auto stays unknown',t=>{
+  const {service}=fixture(t);assert.equal(normalizeServiceTier('default','openai'),'standard');assert.equal(normalizeServiceTier('default','other'),'default');assert.equal(normalizeServiceTier('auto','openai'),'auto');assert.equal(normalizeServiceTier(null,'openai'),null);
+  const e={timestamp:Date.parse(time),provider:'openai',model:'gpt-6.1-sol',rawServiceTier:'default',serviceTier:'default',scope:'response',usage:usage()};assert.equal(service.pricing.estimate(e).status,'Estimated');assert.equal(service.pricing.estimate({...e,rawServiceTier:'auto'}).status,'Unavailable');
+});
+test('observed turn metadata enriches only matching future events and retains raw tier',t=>{
+  const {service,file}=fixture(t);let head=fs.readFileSync(file,'utf8');head=head.replace('"service_tier":"standard",','');fs.writeFileSync(file,head);
+  service.observeTurnMetadata({threadId:'thread-1',turnId:'turn-1',rawServiceTier:'default',provider:'openai',observedAt:Date.parse(time)+1000,source:'desktop-ipc',prompt:'DO-NOT-STORE'});
+  fs.appendFileSync(file,event('token_usage_record',{turn_id:'turn-1',response_id:'before',usage:usage()})+JSON.stringify({timestamp:'2026-10-07T12:00:02Z',type:'token_usage_record',payload:{turn_id:'turn-1',response_id:'after',usage:usage()}})+'\n');service.poll();
+  const rows=service.rows('token_usage');assert.equal(rows[0].serviceTier,null);assert.equal(rows[1].rawServiceTier,'default');assert.equal(rows[1].serviceTier,'standard');assert.equal(service.pricing.estimate(rows[1]).status,'Partial');assert.equal(service.pricing.estimate(rows[1]).reason,'configured-turn-tier-not-response-confirmed');
+  assert.throws(()=>service.observeTurnMetadata({threadId:'thread-1',turnId:'turn-1',source:'guess'}),/invalid/);
 });

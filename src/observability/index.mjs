@@ -1,7 +1,7 @@
 import { SessionLogAdapter, tokenFields } from './session-log-adapter.mjs';
-import { PricingPolicy } from './pricing.mjs';
+import { PricingPolicy, normalizeServiceTier, digest } from './pricing.mjs';
 export { SessionLogAdapter } from './session-log-adapter.mjs';
-export { PricingPolicy, validatePricing } from './pricing.mjs';
+export { PricingPolicy, validatePricing, normalizeServiceTier } from './pricing.mjs';
 
 export function percentile(values,p) { const v=values.filter(Number.isFinite).sort((a,b)=>a-b); return v.length?v[Math.max(0,Math.ceil(v.length*p)-1)]:null; }
 export function unionDuration(intervals) {
@@ -18,6 +18,14 @@ export class ObservabilityService {
     this.store=store;this.now=now;this.adapter=new SessionLogAdapter({store,codexHome,now});this.pricing=new PricingPolicy({store,policy});
   }
   poll() { return this.adapter.poll(); }
+  observeTurnMetadata({threadId,turnId,model,provider,rawServiceTier,effort,observedAt=this.now(),source}={}) {
+    if(!['desktop-ipc','official-app-server'].includes(source)||typeof threadId!=='string'||typeof turnId!=='string'||!Number.isSafeInteger(observedAt)) throw new Error('invalid-observed-turn-metadata');
+    const safe=v=>typeof v==='string'&&/^[a-zA-Z0-9._-]{1,128}$/.test(v)?v:null;
+    const metadata={model:safe(model),provider:safe(provider),rawServiceTier:safe(rawServiceTier),effort:safe(effort),source};
+    const key='observability:turn-metadata:'+digest([threadId,turnId]),history=this.store.getSetting(key,[]);
+    if(JSON.stringify(history.at(-1)?.metadata)!==JSON.stringify(metadata)) { history.push({observedAt,metadata});this.store.setSetting(key,history); }
+    return {recorded:true,source,scope:'exact-turn; only subsequent events are enriched'};
+  }
   rows(table) { return this.store.db.prepare(`SELECT metadata_json FROM ${table}`).all().map(r=>JSON.parse(r.metadata_json)); }
   summary({since=0,groupBy='model'}={}) {
     const keys={model:'model',tier:'serviceTier',effort:'effort',turn:'turnId',thread:'threadId',goal:'goalId',workspace:'workspace'};
@@ -27,7 +35,7 @@ export class ObservabilityService {
     // Expose separate sources; never silently add both ledgers.
     for(const e of all) {
       const unproven=e.initialCounter && groupBy!=='thread';
-      const key=unproven?'Unknown (initial thread counter)':windows[groupBy]?String(Math.floor(e.timestamp/windows[groupBy])*windows[groupBy]):e[keys[groupBy]]??'Unknown';
+      const key=unproven?'Unknown (initial thread counter)':windows[groupBy]?String(Math.floor(e.timestamp/windows[groupBy])*windows[groupBy]):groupBy==='tier'?normalizeServiceTier(e.rawServiceTier??e.serviceTier,e.provider)??'Unknown':e[keys[groupBy]]??'Unknown';
       const ledger=e.scope==='response'?'response':e.scope==='latest-sample'?'latest-sample':'cumulative-delta';
       const mapKey=JSON.stringify([key,ledger]);
       if(!groups.has(mapKey)) groups.set(mapKey,{key,ledger,samples:0,tokens:Object.fromEntries(tokenFields.map(k=>[k,0])),missing:Object.fromEntries(tokenFields.map(k=>[k,0])),estimatedUsd:0,pricedSamples:0,partialPriceSamples:0,pricingReasons:{},actualRequestInputs:[],latestSampleInputs:[],longContextSamples:0,unknownContextSamples:0,discontinuities:0});
@@ -45,7 +53,7 @@ export class ObservabilityService {
     return {groupBy,since,source:'local-session-log',coverage:'best-effort; response and cumulative ledgers are separate and must not be added together',groups:[...groups.values()].map(g=>{
       const inputs=g.actualRequestInputs;
       const snapshotsOnly=g.ledger==='latest-sample';
-      return {...g,tokens:snapshotsOnly?Object.fromEntries(tokenFields.map(k=>[k,null])):g.tokens,actualRequestInputs:undefined,latestSampleInputs:undefined,countLabel:g.ledger==='response'?'Response records':'Usage samples',contextCountLabel:'Observed context samples; not a unique request count',tokenTotalStatus:snapshotsOnly?'Unavailable: latest snapshots cannot establish an additive ledger':'Best-effort',inputP50:percentile(inputs,.5),inputP95:percentile(inputs,.95),inputSamples:inputs.length,latestSampleInputP50:percentile(g.latestSampleInputs,.5),latestSampleInputP95:percentile(g.latestSampleInputs,.95),latestInputObservations:g.latestSampleInputs.length,cacheHitRatio:snapshotsOnly||g.missing.cached_input_tokens||g.missing.input_tokens?null:g.tokens.input_tokens?g.tokens.cached_input_tokens/g.tokens.input_tokens:0,pricingStatus:snapshotsOnly?'Unavailable':g.pricedSamples===g.samples&&!g.partialPriceSamples?'Estimated':g.pricedSamples?'Partial':'Unavailable',estimatedUsd:snapshotsOnly?null:g.pricedSamples?g.estimatedUsd:null};
+      return {...g,tokens:Object.fromEntries(tokenFields.map(k=>[k,snapshotsOnly||g.missing[k]===g.samples?null:g.tokens[k]])),actualRequestInputs:undefined,latestSampleInputs:undefined,countLabel:g.ledger==='response'?'Response records':'Usage samples',contextCountLabel:'Observed context samples; not a unique request count',tokenTotalStatus:snapshotsOnly?'Unavailable: latest snapshots cannot establish an additive ledger':'Best-effort',inputP50:percentile(inputs,.5),inputP95:percentile(inputs,.95),inputSamples:inputs.length,latestSampleInputP50:percentile(g.latestSampleInputs,.5),latestSampleInputP95:percentile(g.latestSampleInputs,.95),latestInputObservations:g.latestSampleInputs.length,cacheHitRatio:snapshotsOnly||g.missing.cached_input_tokens||g.missing.input_tokens?null:g.tokens.input_tokens?g.tokens.cached_input_tokens/g.tokens.input_tokens:0,pricingStatus:snapshotsOnly?'Unavailable':g.pricedSamples===g.samples&&!g.partialPriceSamples?'Estimated':g.pricedSamples||g.partialPriceSamples?'Partial':'Unavailable',estimatedUsd:snapshotsOnly?null:g.pricedSamples?g.estimatedUsd:null};
     })};
   }
   performanceSummary({since=0}={}) {

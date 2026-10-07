@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { digest } from './pricing.mjs';
+import { digest, normalizeServiceTier } from './pricing.mjs';
 
 export const tokenFields = ['input_tokens','cached_input_tokens','cache_write_input_tokens','output_tokens','reasoning_output_tokens','total_tokens'];
 export const tokens = value => Object.fromEntries(tokenFields.map(k => [k, Number.isSafeInteger(value?.[k]) && value[k] >= 0 ? value[k] : null]));
@@ -63,7 +63,11 @@ export class SessionLogAdapter {
     }
     if (!meta.threadId || !Number.isFinite(timestamp)) return;
     const type=p.type ?? event.type;
-    const base={threadId:meta.threadId,turnId:scalar(p.turn_id) ?? meta.turnId ?? null,model:scalar(p.model) ?? meta.model ?? null,provider:scalar(p.model_provider) ?? meta.provider ?? null,serviceTier:scalar(p.service_tier) ?? meta.serviceTier ?? null,effort:meta.effort ?? null,workspace:meta.workspace ?? null,goalId:meta.goalId ?? null,timestamp,source:'local-session-log'};
+    const turnId=scalar(p.turn_id)??meta.turnId??null;
+    const history=this.store.getSetting('observability:turn-metadata:'+digest([meta.threadId,turnId]),[]);
+    const observed=history.filter(m=>m.observedAt<=timestamp).at(-1)?.metadata;
+    const provider=scalar(p.model_provider)??meta.provider??observed?.provider??null,loggedTier=scalar(p.service_tier)??meta.serviceTier??null,rawServiceTier=loggedTier??observed?.rawServiceTier??null;
+    const base={threadId:meta.threadId,turnId,model:scalar(p.model)??meta.model??observed?.model??null,provider,rawServiceTier,serviceTier:normalizeServiceTier(rawServiceTier,provider),tierEvidence:loggedTier?'session-log-field':rawServiceTier?'observed-turn-settings':null,effort:meta.effort??observed?.effort??null,workspace:meta.workspace??null,goalId:meta.goalId??null,timestamp,source:'local-session-log'};
     if (type==='token_count' || type==='token_usage' || type==='token_usage_record') {
       const info=p.info ?? p, responseId=scalar(p.response_id ?? info.response_id), id=digest({thread:meta.threadId,responseId,event:responseId?null:event});
       if(this.store.db.prepare('SELECT 1 FROM token_usage WHERE id=?').get(id)) return;
