@@ -189,7 +189,8 @@ test('owner anchor and single-writer lock remain stable when LOCALAPPDATA change
       const literal = profile.replaceAll("'", "''");
       const command = `$p='${literal}';$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;$acl=[System.IO.Directory]::GetAccessControl($p);if($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value){$acl.SetOwner($sid);[System.IO.Directory]::SetAccessControl($p,$acl)};$acl=[System.IO.Directory]::GetAccessControl($p);$acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value`;
       let ownerSid;
-      try { ownerSid = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true, encoding: 'utf8', timeout: 8000 }).trim(); }
+      // This prepares only a fresh synthetic profile; Windows PowerShell cold starts can exceed eight seconds on hosted runners.
+      try { ownerSid = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true, encoding: 'utf8', timeout: 30000 }).trim(); }
       catch { throw new Error('synthetic-profile-owner-fixture-failed'); }
       assert.match(ownerSid, /^S-1-5-\d+(?:-\d+)+$/);
     }

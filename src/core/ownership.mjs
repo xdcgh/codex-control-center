@@ -17,9 +17,9 @@ export function resolveOwnerAnchor({profile=os.homedir(),create=false}={}) {
   if(process.platform==='win32'&&fs.existsSync(base)){
     const powershell=path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe');
     const script=path.resolve(import.meta.dirname,'../../scripts/Check-OwnerAnchor.ps1');
-    let sid;try{sid=execFileSync(powershell,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-Base',base,'-Anchor',anchor,...(created.has(base)?['-NewBase']:[]),...(created.has(anchor)?['-NewAnchor']:[])],{windowsHide:true,encoding:'utf8',stdio:['ignore','pipe','ignore'],timeout:8000}).trim();}catch{throw new Error('owner-anchor-identity-check-failed');}
+    let sid;try{sid=execFileSync(powershell,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-Base',base,'-Anchor',anchor,...(created.has(base)?['-NewBase']:[]),...(created.has(anchor)?['-NewAnchor']:[])],{windowsHide:true,encoding:'utf8',stdio:['ignore','pipe','ignore'],timeout:20000}).trim();}catch{throw new Error('owner-anchor-identity-check-failed');}
     if(!/^S-1-5-\d+(?:-\d+)+$/.test(sid))throw new Error('owner-anchor-identity-check-failed');
-    if(create)for(const directory of [base,anchor]){try{execFileSync(path.join(process.env.SystemRoot,'System32/icacls.exe'),[directory,'/inheritance:r','/grant:r',`*${sid}:(OI)(CI)F`,'*S-1-5-18:(OI)(CI)F','/deny','*S-1-5-2:(OI)(CI)F'],{windowsHide:true,stdio:'ignore',timeout:8000});}catch{throw new Error('owner-anchor-acl-update-failed');}}
+    if(create)for(const directory of [base,anchor]){try{execFileSync(path.join(process.env.SystemRoot,'System32/icacls.exe'),[directory,'/inheritance:r','/grant:r',`*${sid}:(OI)(CI)F`,'*S-1-5-18:(OI)(CI)F','/deny','*S-1-5-2:(OI)(CI)F'],{windowsHide:true,stdio:'ignore',timeout:20000});}catch{throw new Error('owner-anchor-acl-update-failed');}}
   }
   return anchor;
 }
@@ -28,7 +28,7 @@ export function inspectOwnerLease({directory=resolveOwnerAnchor(),owner}={}){
  if(!Number.isSafeInteger(owner.pid)||owner.pid<=0||typeof owner.startedAt!=='string'||!Number.isFinite(Date.parse(owner.startedAt)))throw new Error('owner-lock-invalid');
  if(process.platform==='win32'){
   const powershell=path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe'),script=path.resolve(import.meta.dirname,'../../scripts/Inspect-OwnerLease.ps1');
-  let result;try{result=JSON.parse(execFileSync(powershell,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-PidValue',String(owner.pid),'-ClaimedStartedAt',owner.startedAt],{windowsHide:true,encoding:'utf8',stdio:['ignore','pipe','ignore'],timeout:8000}));}catch{throw new Error('owner-liveness-proof-unavailable');}
+  let result;try{result=JSON.parse(execFileSync(powershell,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-PidValue',String(owner.pid),'-ClaimedStartedAt',owner.startedAt],{windowsHide:true,encoding:'utf8',stdio:['ignore','pipe','ignore'],timeout:20000}));}catch{throw new Error('owner-liveness-proof-unavailable');}
   if(typeof result.alive!=='boolean')throw new Error('owner-liveness-proof-invalid');return{present:true,alive:result.alive,stale:!result.alive};
  }
  let alive=true;try{process.kill(owner.pid,0);}catch(error){if(error.code==='ESRCH')alive=false;}return{present:true,alive,stale:!alive};
