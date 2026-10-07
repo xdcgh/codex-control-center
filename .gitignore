@@ -1,0 +1,17 @@
+runtime/
+*.tmp
+node_modules/
+dist/
+target/
+artifacts/
+research/references/
+diagnostics/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite*
+.env*
+auth.json
+*.log
+*.jsonl
+!test/fixtures/*.jsonl

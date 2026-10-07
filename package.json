@@ -1,0 +1,12 @@
+{
+  "name": "codex-quota-watchdog",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.mjs",
+    "doctor": "node --disable-warning=ExperimentalWarning src/cli.mjs doctor",
+    "status": "node --disable-warning=ExperimentalWarning src/cli.mjs status"
+  }
+}
