@@ -7,7 +7,7 @@ Updated 2026-10-07. This page separates baseline evidence, research, simulations
 | Check | Result | Scope and limits |
 | --- | --- | --- |
 | Legacy Node unit suite | **PASS: 25/25; 0 failed** | Isolated unit tests from the imported watchdog; no live model request. |
-| Full repository `npm test` suite | **PASS: 52/52; 0 failed** | Includes baseline tests, Core v2 fixtures and black-box acceptance tests using simulated adapters and temporary SQLite. No real Codex turn was started. |
+| Full repository `npm test` suite | **PASS: 52/52; 0 failed** | Verified against Core v2 source commit `0288b89`, before later Observability and named-pipe broker additions. Includes baseline/Core v2 fixtures and black-box tests with simulated adapters and temporary SQLite. No real Codex turn was started. |
 | Legacy repository state | **Saved** | Legacy source baseline commit `56175194b7c4896c64636d161ecab4d0457beacc`, tag `legacy-watchdog-baseline-2026-10-07`. The original runtime daemon was not stopped or modified. |
 | New repository migration baseline | **Saved** | Initial import commit `e115cae` and tag `legacy-import-baseline-2026-10-07`. |
 | Existing Desktop smoke scripts | **Inspected, not run** | They create owned test Threads/Goals, navigate Desktop, send model turns and write receipts. Their side effects were excluded from Phase 0 read-only validation. |
@@ -32,7 +32,7 @@ Source and license review is recorded in [research.md](research.md). Token/accou
 
 Targeted black-box acceptance: **PASS 6/6** via `node --test test/acceptance-observability.test.mjs`, using synthetic JSONL events and a temporary SQLite database. No actual Codex session data was read. This result does not represent a full `npm test` rerun after the observability files were added.
 
-Source identity: repository base commit `f901eab` plus the uncommitted working tree at test time. SHA-256 fingerprints:
+Source identity: Observability implementation commit `276e4bf`; the fingerprints below bind this test record to the tested modules and policy snapshot. SHA-256 fingerprints:
 
 | File | SHA-256 |
 | --- | --- |
@@ -41,6 +41,44 @@ Source identity: repository base commit `f901eab` plus the uncommitted working t
 | `src/observability/pricing.mjs` | `06A54804CAC57AEE3B901AC2DF6507E1D4DE94481A5E282E2971B0662FB0A625` |
 | `pricing.json` | `5E71029349A2EAA4D69E22E5A1B57B5712ABA556DE29743D631DC3C588E38161` |
 | `test/acceptance-observability.test.mjs` | `A8D972F1FCFC2DD25E8E7F8A20401D38E3168EA7854994A71205228EF51CC737` |
+
+### Local broker targeted acceptance
+
+Targeted black-box acceptance: **PASS 6/6** via `node --test test/acceptance-broker.test.mjs` with the temporary `CODEX_CONTROL_CENTER_NATIVE_TEST_HELPER` environment override. Five cases exercised the Node mock broker; one case spawned the production Rust helper in `--pipe-broker-helper` mode with a mock route. No Core process or Codex turn was started. On Windows, the temporary broker directory and descriptor DACLs were read and confirmed to include the current user SID and SYSTEM while excluding Everyone and Built-in Users. The descriptor intentionally contains the random authentication token for the authorized UI; tests verify it is not echoed in RPC responses.
+
+The native helper test covered local authentication, response correlation, per-line bounds, and the eight-client cap. The source statically sets `first_pipe_instance(true)` and `reject_remote_clients(true)`. No remote-client attempt was made, so OS-level remote rejection is supported by source inspection rather than a live remote test. A full `npm test` run was not repeated while CI was validating the release candidate.
+
+Source identity: repository base commit `b4e9fe0` plus the uncommitted broker/desktop working tree at test time. The separate debug helper binary was built outside the repository. SHA-256 fingerprints:
+
+| File | SHA-256 |
+| --- | --- |
+| `src/core/broker.mjs` | `0B37FCB596B031D6C37B2824D8C6AB31D974CBD22BCDE5AD30679FAF351E158E` |
+| `src/core/router.mjs` | `8604F40ED3FBCB0ED0818213165F4EAA7173394B931964452EB0CE30F3CF9012` |
+| `src/adapters/codex.mjs` | `31D1815B52107ACDDA13ACFFC1581C5D9181B051AFCE97A0654D30C99FC9587F` |
+| `src/store.mjs` | `4BDF2575B3741D9443FFF49E215B126EC822F42573FD41598D02238099834B5E` |
+| `src/core-cli.mjs` | `C2F0C484ED17FA32E466D7A9A5C5ADAD8D7B6D0DFDFBDF3651CBE92C340098DA` |
+| `src-tauri/src/pipe_helper.rs` | `0DBFDF0BEEA1EA7870AC89C7EF602CEF2FB8315876B1CA3B5E97551F351E7CE7` |
+| `src-tauri/src/config_binding.rs` | `9A847E8004D5B42035A0D19570727FDC6724A8727CC4B81C631B2989341C440A` |
+| `src-tauri/src/main.rs` | `A1F5A7B0DD49787C3D9F6FEE801E2ECA3203E96934043634A0539DCA63F5AA51` |
+| Debug helper executable | `214C3195483857137A4E1DDD817DBB6C3299D23A07515FCC922F98E0B0971B42` |
+| `test/acceptance-broker.test.mjs` | `CAB50F43ADFD6E6C3EECA7B92E1ED1477319F381299BC2C742207671D2B6A057` |
+
+### Core profile and Resume now targeted acceptance
+
+Targeted Core black-box checks: **PASS 8/8** via the `owner anchor`, concurrent `Resume now`, and one-shot `NeverAuto` test-name filters in `test/acceptance-core.test.mjs`. The binding-loss check used the debug helper's `--probe-config-binding` mode against a synthetic temporary profile. It verified that a missing binding plus an established-binding sentinel or stale owner marker fails closed and does not create a replacement config/state directory. No GUI, Core sidecar, Codex process, or real user profile was started or read. This is targeted evidence only, not a full-suite rerun after current source changes.
+
+Source identity: repository base commit `b4e9fe0` plus the current uncommitted Core/profile/test working tree. SHA-256 fingerprints:
+
+| File | SHA-256 |
+| --- | --- |
+| `src/core/control-center.mjs` | `616229315E713F379A6A4ABAF498699EC12E9684D2BA3FE8CB02A3681AE827B2` |
+| `src/core/ownership.mjs` | `F73CEA2D742C91FCE03F7C2916DC097EB881C77861680044C601CF9B1BFAE3AF` |
+| `src/adapters/codex.mjs` | `31D1815B52107ACDDA13ACFFC1581C5D9181B051AFCE97A0654D30C99FC9587F` |
+| `src/core-cli.mjs` | `C2F0C484ED17FA32E466D7A9A5C5ADAD8D7B6D0DFDFBDF3651CBE92C340098DA` |
+| `src-tauri/src/config_binding.rs` | `9A847E8004D5B42035A0D19570727FDC6724A8727CC4B81C631B2989341C440A` |
+| `src-tauri/src/main.rs` | `A1F5A7B0DD49787C3D9F6FEE801E2ECA3203E96934043634A0539DCA63F5AA51` |
+| `test/acceptance-core.test.mjs` | `6C058B49AADEEA4C475EAEA6D8503AEE40C936BC6C1736A1EEFFB0F083977038` |
+| Debug helper executable | `214C3195483857137A4E1DDD817DBB6C3299D23A07515FCC922F98E0B0971B42` |
 
 ## Windows build tool availability (read-only check)
 
@@ -57,7 +95,7 @@ This is a tool-presence record, not a build result. The task-specific Rust toolc
 
 | Phase | Required evidence | Current state |
 | --- | --- | --- |
-| Phase 2 — Core v2 | Deterministic parser/state/scheduler tests; app-server integration with explicit authorization; durable-state restart tests; no duplicate dispatch | **Fixture suite PASS (included in 52/52); phase remains pending** for runtime integration and owner handover |
+| Phase 2 — Core v2 | Deterministic parser/state/scheduler tests; app-server integration with explicit authorization; durable-state restart tests; no duplicate dispatch | **Fixture suite PASS (52/52 at `0288b89`); phase remains pending** for runtime integration and owner handover |
 | Phase 3 — Desktop MVP | Packaged Tauri shell; tray/window/widget behavior and UI smoke | Pending |
 | Phase 4 — Observability | Quota history, token attribution and price-policy tests with exact/estimated/unavailable distinctions | Pending |
 | Phase 5 — Performance | Instrumented client timings with labels that distinguish visible end-to-end timing from unavailable model timing | Pending |

@@ -16,12 +16,12 @@ export class ControlCenterCore {
     this.settings = validateSettings(store.getSetting('core-settings', settings));
     store.setSetting('core-settings',this.settings);
     this.nextQuotaPollAt = 0; this.nextScanAt = 0; this.polling = null; this.nextHistorySampleAt = store.getSetting('next-history-sample-at', 0); this.nextCompatibilityAt = 0;
-    this.quota = null; this.lastQuotaPollAt = null; this.lastError = null; this.errorCount = 0; this.active = new Set(); this.stopped = false; this.ticking = false;
+    this.quota = null; this.lastQuotaPollAt = null; this.lastError = null; this.errorCount = 0; this.active = new Set();this.manualResumes=new Set(); this.stopped = false; this.ticking = false;
     const desktop = { snapshot: id => adapter.snapshot(id),
       request: (method, params, owner) => { this.assertThreadEnabled(params.conversationId); return adapter.desktop.request(method, params, owner); } };
     if (typeof adapter.desktop.getGeneration === 'function') desktop.getGeneration = id => adapter.desktop.getGeneration(id);
     this.engine = new WatchdogEngine({ store, desktop, account: adapter.account, now, execute, quotaProbeMode: 'live', resetBufferMs: 0, continuationText: CONTINUATION_TEXT,
-      enabled: id => !this.stopped && this.settings.autoResume && adapter.compatibility.verified && (!id || this.threadEnabled(id)),
+      enabled: id => !this.stopped && adapter.compatibility.verified && (this.manualResumes.has(id)||(this.settings.autoResume&&(!id||this.threadEnabled(id)))),
       enrollmentSince: () => this.enrollmentSince,
       verifyDesktop: () => adapter.verifyWriteSafety(), log: (event, details) => store.event(event, details) });
     // Never silently enroll work that stopped before this application was enabled.
@@ -37,6 +37,7 @@ export class ControlCenterCore {
   threadEnabled(id) { const p=this.policy(id); return p.autoResume && p.allowAutomaticStart && !p.manualPaused && !p.neverAutoResume; }
   assertThreadEnabled(id) {
     const p = this.policy(id);
+    if(this.manualResumes.has(id)&&!this.stopped)return;
     if (!this.settings.autoResume || p.manualPaused || p.neverAutoResume || !p.autoResume || !p.allowAutomaticStart || this.stopped) throw new Error('thread-auto-resume-disabled');
   }
   setThreadPolicy(id, update) {
@@ -61,6 +62,7 @@ export class ControlCenterCore {
         if (this.now() >= this.nextHistorySampleAt) {
           this.store.sampleQuota(raw,this.now(),this.adapter.source,this.adapter.compatibility.cliVersion ?? null);
           this.nextHistorySampleAt = this.now()+this.settings.historySampleSeconds*1000; this.store.setSetting('next-history-sample-at',this.nextHistorySampleAt);
+          if(this.now()-(this.store.getSetting('history-maintained-at',0))>=86400000)this.store.maintainHistory(this.now());
         }
         this.lastError = null; this.errorCount = 0; this.nextQuotaPollAt = this.now()+this.settings.recoveryPollSeconds*1000;
         if(this.execute && this.settings.autoResume && this.quota.known && this.quota.ready && this.adapter.compatibility.verified) {
@@ -140,14 +142,11 @@ export class ControlCenterCore {
       .filter(({r,p}) => p.autoResume && p.allowAutomaticStart && !p.neverAutoResume && !p.manualPaused && p.retryCount < p.maxRetries && p.nextAttemptAt <= this.now() && (p.priority < 2 || this.quota.fiveHourRemainingPercent > this.settings.reservePercent))
       .sort((a,b) => a.p.priority-b.p.priority || a.r.failedAt-b.r.failedAt || a.p.order-b.p.order);
     // Occupancy includes already resumed work; avoid releasing a slot merely on receipt of a start acknowledgement.
-    const occupied=new Set(Object.values(this.engine.state.records).filter(r => r.phase === 'watching' && ['running','continuation-accepted','new-turn-observed','goal-between-turns'].includes(r.reason)).map(r=>r.threadId));
-    for(const intent of Object.values(this.engine.state.ledger))if(['sent','uncertain','dispatching'].includes(intent.phase)||intent.lifecycle==='running')occupied.add(intent.threadId);
-    for(const id of this.active)occupied.add(id);
-    const available = Math.max(0,this.settings.maxConcurrentResumes-occupied.size);
+    const available = Math.max(0,this.settings.maxConcurrentResumes-this.occupiedThreads().size);
     await Promise.all(queue.slice(0,available).map(({r,p}) => this.dispatch(r,p)));
   }
   async dispatch(record, policy) {
-    if (this.active.has(record.threadId) || this.stopped || !this.settings.autoResume) return false;
+    if (this.active.has(record.threadId) || this.stopped || (!this.settings.autoResume&&!this.manualResumes.has(record.threadId))) return false;
     this.active.add(record.threadId);
     try {
       this.assertThreadEnabled(record.threadId);
@@ -173,6 +172,23 @@ export class ControlCenterCore {
     return { mode: this.execute ? 'execute' : 'observe', settings: this.settings, compatibility: this.adapter.compatibility, quota: this.quota,
       lastQuotaPollAt: this.lastQuotaPollAt, nextQuotaPollAt: this.nextQuotaPollAt, nextHistorySampleAt: this.nextHistorySampleAt, lastError: this.lastError,
       tasks: Object.values(this.engine.state.records).map(r => ({ ...r, policy: this.policy(r.threadId) })), activeResumes: this.active.size };
+  }
+  occupiedThreads() {
+    const occupied=new Set(Object.values(this.engine.state.records).filter(r=>r.phase==='watching'&&['running','continuation-accepted','new-turn-observed','goal-between-turns'].includes(r.reason)).map(r=>r.threadId));
+    for(const intent of Object.values(this.engine.state.ledger))if(['sent','uncertain','dispatching'].includes(intent.phase)||intent.lifecycle==='running')occupied.add(intent.threadId);
+    for(const id of this.active)occupied.add(id);
+    for(const id of this.manualResumes)occupied.add(id);
+    return occupied;
+  }
+  async resumeNow(id) {
+    if(!isUuid(id))throw new Error('invalid-thread-id');
+    if(!this.execute)throw new Error('observe-mode-cannot-resume');
+    const record=this.engine.state.records[id];
+    if(!record?.failureTurnId||record.phase!=='waitingQuota')throw new Error('thread-not-eligible-for-quota-resume');
+    if(this.active.has(id)||this.manualResumes.has(id))throw new Error('resume-already-in-flight');
+    if(this.occupiedThreads().size>=this.settings.maxConcurrentResumes)throw new Error('resume-concurrency-limit');
+    this.manualResumes.add(id);
+    try{const quota=quotaStatus(await this.adapter.readQuota(),this.now());if(!quota.known||!quota.ready)throw new Error(quota.reason);return{resumed:await this.dispatch(record,this.policy(id))};}finally{this.manualResumes.delete(id);}
   }
   async close() { this.stopped = true; if(this.polling) await this.polling; await this.adapter.close(); }
 }

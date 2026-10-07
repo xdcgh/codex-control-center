@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { ControlCenterCore } from '../src/core/control-center.mjs';
 import { SqliteStore } from '../src/persistence/sqlite.mjs';
+import { resolveOwnerAnchor } from '../src/core/ownership.mjs';
+import { acquireLock } from '../src/store.mjs';
 import { limits, NOW, NEXT, THREAD, task } from './fixtures.mjs';
 
 const idAt = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -174,6 +177,146 @@ test('settings changed through the public API survive reopening SQLite and overr
     assert.equal(settings.historySampleSeconds, 120);
     assert.equal(settings.reservePercent, 15);
   } finally { await r.close(); }
+});
+
+test('owner anchor and single-writer lock remain stable when LOCALAPPDATA changes', () => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-profile-acceptance-'));
+  const previous = { user: process.env.USERPROFILE, app: process.env.LOCALAPPDATA, temp: process.env.TEMP };
+  let release;
+  try {
+    process.env.USERPROFILE = profile;
+    process.env.LOCALAPPDATA = path.join(profile, 'appdata-one');
+    process.env.TEMP = path.join(profile, 'temp-one');
+    const first = resolveOwnerAnchor({ create: true });
+    assert.equal(path.resolve(first), path.resolve(profile, '.codex-control-center', 'owner'));
+    release = acquireLock(first);
+
+    process.env.LOCALAPPDATA = path.join(profile, 'appdata-two');
+    process.env.TEMP = path.join(profile, 'temp-two');
+    const second = resolveOwnerAnchor({ create: false });
+    assert.equal(path.resolve(second), path.resolve(first));
+    assert.throws(() => acquireLock(second), /watchdog-already-running/);
+    assert.equal(fs.existsSync(path.join(profile, '.codex', 'owner')), false);
+
+    const linkedProfile = path.join(profile, 'linked-profile');
+    const outsideAnchor = path.join(profile, 'outside-anchor');
+    fs.mkdirSync(linkedProfile);
+    fs.mkdirSync(outsideAnchor);
+    fs.symlinkSync(outsideAnchor, path.join(linkedProfile, '.codex-control-center'), process.platform === 'win32' ? 'junction' : 'dir');
+    assert.throws(() => resolveOwnerAnchor({ profile: linkedProfile, create: true }), /owner-anchor-reparse-rejected/);
+  } finally {
+    release?.();
+    if (previous.user == null) delete process.env.USERPROFILE; else process.env.USERPROFILE = previous.user;
+    if (previous.app == null) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = previous.app;
+    if (previous.temp == null) delete process.env.TEMP; else process.env.TEMP = previous.temp;
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('a lost config binding or stale owner/state marker never selects a new profile config', { skip: process.platform !== 'win32' || !process.env.CODEX_CONTROL_CENTER_NATIVE_TEST_HELPER }, async t => {
+  const helper = process.env.CODEX_CONTROL_CENTER_NATIVE_TEST_HELPER;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-binding-acceptance-'));
+  const profile = path.join(base, 'synthetic-user-profile', '.codex-control-center');
+  fs.mkdirSync(profile, { recursive: true });
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const probe = () => {
+    const result = spawnSync(helper, ['--probe-config-binding', profile], { windowsHide: true, encoding: 'utf8', timeout: 5000 });
+    let value;
+    try { value = JSON.parse(result.stdout); } catch { throw new Error('binding-probe-response-invalid'); }
+    return { status: result.status, value };
+  };
+
+  assert.deepEqual(probe(), { status: 0, value: { selected: null } }); // Explicitly fresh profile has no saved state.
+  const external = path.join(base, 'selected-config.json');
+  fs.writeFileSync(external, JSON.stringify({ stateDirectory: path.join(base, 'external-state') }));
+  fs.writeFileSync(path.join(profile, 'config-binding.json'), JSON.stringify({ config: external }));
+  assert.deepEqual(probe(), { status: 0, value: { selected: external } });
+
+  fs.unlinkSync(path.join(profile, 'config-binding.json'));
+  fs.writeFileSync(path.join(profile, 'binding-established'), '1\n');
+  const lostBinding = probe();
+  assert.notEqual(lostBinding.status, 0);
+  assert.match(lostBinding.value.error, /binding is missing/);
+  assert.equal(fs.existsSync(path.join(profile, 'config.json')), false);
+  assert.equal(fs.existsSync(path.join(profile, 'state')), false);
+
+  fs.unlinkSync(path.join(profile, 'binding-established'));
+  fs.mkdirSync(path.join(profile, 'owner'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'owner', 'daemon.lock'), JSON.stringify({ pid: 99999999 }));
+  assert.notEqual(probe().status, 0);
+  assert.equal(fs.existsSync(path.join(profile, 'config.json')), false);
+  fs.rmSync(path.join(profile, 'owner'), { recursive: true, force: true });
+  fs.mkdirSync(path.join(profile, 'state'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'state', 'control-center.sqlite'), 'SYNTHETIC-STATE-MARKER');
+  assert.notEqual(probe().status, 0);
+  assert.equal(fs.existsSync(path.join(profile, 'config.json')), false);
+});
+
+test('two simultaneous Resume now requests share the scheduled-resume concurrency slots', async () => {
+  const ids = [idAt(30), idAt(31)];
+  const r = makeRig({ ids, execute: true, settings: { maxConcurrentResumes: 1 } });
+  try {
+    await r.enrollQuotaStops();
+    r.setQuota(limits({ used: 0, weekly: 0 }));
+    const outcomes = await Promise.allSettled(ids.map(id => r.core.resumeNow(id)));
+    assert.equal(outcomes.filter(x => x.status === 'fulfilled' && x.value.resumed).length, 1);
+    assert.equal(outcomes.filter(x => x.status === 'rejected' && /resume-concurrency-limit/.test(x.reason.message)).length, 1);
+    assert.equal(r.writes.length, 1);
+  } finally { await r.close(); }
+});
+
+test('Resume now is a one-shot override for NeverAuto but preserves policy and still enforces quota, user, and compatibility gates', async t => {
+  await t.test('successful manual turn does not clear NeverAuto', async () => {
+    const r = makeRig({ execute: true });
+    try {
+      await r.enrollQuotaStops();
+      r.core.setSettings({ autoResume: false });
+      r.core.setThreadPolicy(THREAD, { autoResume: false, neverAutoResume: true });
+      r.setQuota(limits({ used: 0, weekly: 0 }));
+      const result = await r.core.resumeNow(THREAD);
+      assert.equal(result.resumed, true);
+      assert.equal(r.writes.length, 1);
+      assert.equal(r.core.snapshot().tasks[0].policy.neverAutoResume, true);
+      assert.equal(r.core.snapshot().tasks[0].policy.autoResume, false);
+    } finally { await r.close(); }
+  });
+  await t.test('weekly quota still blocks the one-shot action', async () => {
+    const r = makeRig({ execute: true });
+    try {
+      await r.enrollQuotaStops();
+      r.core.setThreadPolicy(THREAD, { neverAutoResume: true });
+      r.setQuota(limits({ used: 0, weekly: 100 }));
+      await assert.rejects(r.core.resumeNow(THREAD), /quota-exhausted/);
+      assert.equal(r.writes.length, 0);
+      assert.equal(r.core.policy(THREAD).neverAutoResume, true);
+    } finally { await r.close(); }
+  });
+  await t.test('a new approval request still blocks the one-shot action', async () => {
+    const r = makeRig({ execute: true });
+    try {
+      await r.enrollQuotaStops();
+      r.core.setThreadPolicy(THREAD, { neverAutoResume: true });
+      r.states.set(THREAD, task({ status: 'failed', requests: [{ method: 'approval' }] }));
+      r.setQuota(limits({ used: 0, weekly: 0 }));
+      const result = await r.core.resumeNow(THREAD);
+      assert.equal(result.resumed, false);
+      assert.equal(r.writes.length, 0);
+      assert.equal(r.core.policy(THREAD).neverAutoResume, true);
+    } finally { await r.close(); }
+  });
+  await t.test('unknown compatibility blocks the one-shot action', async () => {
+    const r = makeRig({ execute: true });
+    try {
+      await r.enrollQuotaStops();
+      r.core.setThreadPolicy(THREAD, { neverAutoResume: true });
+      r.adapter.compatibility.verified = false;
+      r.setQuota(limits({ used: 0, weekly: 0 }));
+      const result = await r.core.resumeNow(THREAD);
+      assert.equal(result.resumed, false);
+      assert.equal(r.writes.length, 0);
+      assert.equal(r.core.policy(THREAD).neverAutoResume, true);
+    } finally { await r.close(); }
+  });
 });
 
 test('a sent continuation ledger prevents duplicate delivery after duplicate failure events and restart', async () => {

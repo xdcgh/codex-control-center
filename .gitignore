@@ -17,3 +17,4 @@ auth.json
 !test/fixtures/*.jsonl
 src-tauri/resources/
 src-tauri/gen/
+.packaged/

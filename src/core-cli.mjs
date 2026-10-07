@@ -6,11 +6,15 @@ import { SqliteStore } from './persistence/sqlite.mjs';
 import { ControlCenterCore } from './core/control-center.mjs';
 import { acquireLock } from './store.mjs';
 import { migrateLegacy } from './core/migration.mjs';
+import { startBroker } from './core/broker.mjs';
+import { createRouter } from './core/router.mjs';
+import { ObservabilityClient } from './core/observability-client.mjs';
+import { resolveOwnerAnchor } from './core/ownership.mjs';
 
 const args = process.argv.slice(2), command = args[0] ?? 'doctor';
 const argument = key => { const i = args.indexOf(key); return i < 0 ? null : args[i+1]; };
 const output = value => process.stdout.write(JSON.stringify(value)+'\n');
-let store, adapter, core, release, ownerRelease, quotaTimer;
+let store, adapter, core, release, ownerRelease, quotaTimer, broker,observability;
 try {
   const configPath = argument('--config');
   if (!configPath) throw new Error('core-config-required');
@@ -19,7 +23,7 @@ try {
   adapter = new CodexAdapter(config);
   if (command === 'doctor') output(await adapter.doctor({ threadId: argument('--thread') }));
   else if (['run','sidecar','status','history','migrate'].includes(command)) {
-    if(['run','sidecar'].includes(command))ownerRelease=acquireLock(path.join(process.env.LOCALAPPDATA ?? process.env.TEMP ?? config.stateDirectory,'CodexControlCenter','owner'));
+    if(['run','sidecar'].includes(command))ownerRelease=acquireLock(resolveOwnerAnchor({create:true}));
     release = acquireLock(config.stateDirectory);
     store = new SqliteStore(path.join(config.stateDirectory,'control-center.sqlite'));
     if(command==='migrate')output(migrateLegacy(store,config.legacyStateDirectory,{dryRun:!args.includes('--apply')}));
@@ -31,6 +35,11 @@ try {
       let stop = false;
       const finish = () => { stop = true; core.stopped = true; };
       process.on('SIGINT',finish); process.on('SIGTERM',finish);
+      observability=new ObservabilityClient({database:path.join(config.stateDirectory,'control-center.sqlite'),codexHome:config.codexHome});
+      const route=createRouter({core,store,adapter,observability,shutdown:finish});
+      const nativeBin=process.env.CODEX_CONTROL_CENTER_BROKER_HELPER??config.nativeBrokerBin;
+      if(args.includes('--execute')&&!nativeBin)throw new Error('native-broker-helper-required-for-execution');
+      broker=await startBroker({stateDirectory:config.stateDirectory,route,nativeBin,onFatal:finish});
       // Quota checks continue independently while slow desktop thread reads are pending.
       quotaTimer=setInterval(()=>{ void core.pollQuota().catch(error=>output({method:'quota/error',params:{reason:error.message}})); },250);
       if (command === 'sidecar') {
@@ -43,16 +52,7 @@ try {
             let request;
             try {
               if (line.length > 65536) throw new Error('sidecar-request-too-large');
-              request = JSON.parse(line); let result;
-              if (request.method === 'snapshot') result = core.snapshot();
-              else if (request.method === 'settings/update') result = core.setSettings(request.params ?? {});
-              else if (request.method === 'thread/policy') result = core.setThreadPolicy(request.params.threadId, request.params.update);
-              else if (request.method === 'quota/history') result = store.queryQuotaHistory(request.params ?? {});
-              else if (request.method === 'events/list') result = store.events();
-              else if (request.method === 'doctor') result = await adapter.doctor(request.params ?? {});
-              else if (request.method === 'refresh') { core.nextQuotaPollAt=0; core.nextScanAt=0; result=await core.tick(); }
-              else if (request.method === 'shutdown') { result={ stopping:true }; finish(); }
-              else throw new Error('unknown-sidecar-method');
+              request = JSON.parse(line);const result=await route(request);
               output({ id: request.id ?? null, result });
             } catch (error) { output({ id: request?.id ?? null, error: { message:error.message } }); }
           });
@@ -63,4 +63,4 @@ try {
     }
   } else throw new Error('usage: doctor | status | history | run | sidecar --config FILE [--execute]');
 } catch (error) { output({ ok:false,error:error.message }); process.exitCode=1; }
-finally { if(quotaTimer)clearInterval(quotaTimer); if (core) await core.close(); else if (adapter) await adapter.close(); store?.close(); release?.(); ownerRelease?.(); }
+finally { if(quotaTimer)clearInterval(quotaTimer);if(broker)await broker.close();if(observability)await observability.close(); if (core) await core.close(); else if (adapter) await adapter.close(); store?.close(); release?.(); ownerRelease?.(); }

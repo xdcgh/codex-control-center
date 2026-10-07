@@ -7,6 +7,7 @@ import { listRootThreads, isRootThreadEligible } from '../catalog.mjs';
 import { verifyCurrentDesktop, openExistingThread } from '../desktop-host.mjs';
 import { readJson } from '../store.mjs';
 import { assess, quotaStatus, isUuid } from '../policy.mjs';
+import { resolveOwnerAnchor } from '../core/ownership.mjs';
 
 export class OfficialAppServerAdapter {
   constructor(config) { this.config = config; this.client = new AccountClient(config); this.source = 'official-app-server'; }
@@ -63,8 +64,28 @@ export class CompatibilityProbe {
   }
 }
 
-export function assertOwnerHandover(config) {
-  if (!config.ownerHandoverAcknowledged || !config.legacyStateDirectory) throw new Error('explicit-owner-handover-required');
+export function inspectLegacyOwners() {
+  if(process.platform!=='win32')throw new Error('fresh-install-owner-proof-requires-windows');
+  const powershell=path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe');
+  const script=`$ErrorActionPreference='Stop'; $task=Get-ScheduledTask -TaskName 'CodexQuotaWatchdog' -ErrorAction SilentlyContinue; $processes=@(Get-CimInstance Win32_Process -Filter "Name='node.exe' OR Name='powershell.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'codex-quota-watchdog.*(cli[.]mjs|Start-Watchdog[.]ps1)' }); [pscustomobject]@{legacyTaskPresent=($null -ne $task);legacyProcesses=$processes.Count}|ConvertTo-Json -Compress`;
+  const result=spawnSync(powershell,['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,encoding:'utf8',timeout:8000});
+  if(result.status!==0)throw new Error('legacy-owner-proof-unavailable');
+  let proof;try{proof=JSON.parse(result.stdout);}catch{throw new Error('legacy-owner-proof-invalid');}
+  if(typeof proof.legacyTaskPresent!=='boolean'||!Number.isInteger(proof.legacyProcesses))throw new Error('legacy-owner-proof-invalid');
+  return proof;
+}
+
+export function assertOwnerHandover(config,{legacyProbe=inspectLegacyOwners,ownerAnchor=resolveOwnerAnchor}={}) {
+  if(!config.legacyStateDirectory) {
+    if(config.installationMode!=='fresh')throw new Error('explicit-owner-handover-required');
+    const proof=legacyProbe();
+    if(proof.legacyTaskPresent||proof.legacyProcesses>0)throw new Error('legacy-owner-detected-handover-required');
+    const owner=readJson(path.join(ownerAnchor(),'daemon.lock'),null);
+    const stateOwner=readJson(path.join(config.stateDirectory,'daemon.lock'),null);
+    if(owner?.pid!==process.pid||stateOwner?.pid!==process.pid)throw new Error('fresh-install-single-owner-proof-missing');
+    return;
+  }
+  if (!config.ownerHandoverAcknowledged) throw new Error('explicit-owner-handover-required');
   if (path.resolve(config.stateDirectory).toLowerCase() === path.resolve(config.legacyStateDirectory).toLowerCase()) throw new Error('legacy-state-directory-must-remain-isolated');
   const control = readJson(path.join(config.legacyStateDirectory, 'control.json'), null);
   if (!control || control.enabled !== false) throw new Error('legacy-watchdog-must-be-paused-before-execution');
