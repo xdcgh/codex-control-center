@@ -10,7 +10,9 @@ Updated: 2026-10-07 (Asia/Shanghai).
 | Legacy running state | Monitoring enabled; one watched task, three inactive records | Private runtime snapshot; no task content published |
 | Legacy rollback | Commit and annotated tag saved | Local workspace baseline |
 | New repository | Independent import with sanitized documentation | No earlier commits existed to preserve |
-| Community research | All eleven requested repositories inspected | Current HEAD and license notes being documented |
+| Community research | COMPLETE: all eleven requested repositories inspected | Pinned HEADs, actual licenses, official protocol/framework sources in `docs/research.md` |
+| Stack decision | Tauri 2 + Rust + React/TypeScript + existing Node sidecar | ADR accepted; no measured memory claim |
+| Publication surface scan | PASS: Gitleaks 8.30.1 history and working files, private-path review | Initial source import; repeat for changed stages |
 | New core | In progress | Not yet live-enabled |
 | New Desktop smoke | Not run | Existing scripts provision owned tests and consume model quota |
 | Natural quota cycle | NOT OBSERVED | Cannot be replaced by fixture tests |
