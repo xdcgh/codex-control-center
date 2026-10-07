@@ -13,6 +13,7 @@ Updated: 2026-10-07 (Asia/Shanghai).
 | Community research | COMPLETE: all eleven requested repositories inspected | Pinned HEADs, actual licenses, official protocol/framework sources in `docs/research.md` |
 | Stack decision | Tauri 2 + Rust + React/TypeScript + existing Node sidecar | ADR accepted; no measured memory claim |
 | Publication surface scan | PASS: Gitleaks 8.30.1 history and working files, private-path review | Initial source import; repeat for changed stages |
+| Remote CI | PASS on `f901eab`: Windows/Linux tests and publication security | https://github.com/xdcgh/codex-control-center/actions/runs/37567110625 |
 | Core v2 headless suite | PASS: 52/52, including 25 baseline and 17 independent acceptance tests | Real temporary SQLite; simulated adapters, no live turn |
 | Core v2 live execution | Pending safe ownership handover | Preserve legacy records and send ledger; never run two execution owners |
 | Core v2 scheduler | Priority/reserve/concurrency/cooldown/retries/manual policy implemented and tested | ACK lag and new-Turn lifecycle keep concurrency slots occupied |
