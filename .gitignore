@@ -15,3 +15,5 @@ auth.json
 *.log
 *.jsonl
 !test/fixtures/*.jsonl
+src-tauri/resources/
+src-tauri/gen/
