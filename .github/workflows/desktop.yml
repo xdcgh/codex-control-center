@@ -1,0 +1,77 @@
+name: Windows desktop package
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'ui/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - 'pricing.json'
+      - '.github/workflows/desktop.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-package:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: windows-rust-1.99-${{ hashFiles('src-tauri/Cargo.lock') }}
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Select pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Rust installation failed' }
+          rustup default 1.99.0
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Rust selection failed' }
+      - name: Build native test application with embedded frontend
+        run: npm run desktop:build -- --debug --no-bundle
+      - name: Validate production pipe helper and Core
+        shell: pwsh
+        run: |
+          $env:CODEX_CONTROL_CENTER_NATIVE_TEST_HELPER = Join-Path $env:GITHUB_WORKSPACE 'src-tauri/target/debug/codex-control-center.exe'
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw 'Native helper and Core acceptance failed' }
+      - name: Build release installer
+        run: npm run desktop:build -- --bundles nsis
+      - name: Assemble portable package and hashes
+        shell: pwsh
+        run: |
+          $taskReleaseDirectory = Join-Path $env:GITHUB_WORKSPACE 'artifacts/release'
+          $taskPortableDirectory = Join-Path $env:GITHUB_WORKSPACE 'artifacts/portable'
+          New-Item -ItemType Directory -Path $taskReleaseDirectory -Force | Out-Null
+          node scripts/prepare-run.mjs --exe (Join-Path $env:GITHUB_WORKSPACE 'src-tauri/target/release/codex-control-center.exe') --output $taskPortableDirectory
+          if ($LASTEXITCODE -ne 0) { throw 'Portable artifact assembly failed' }
+          Copy-Item -LiteralPath 'LICENSE','THIRD_PARTY_NOTICES.md' -Destination $taskPortableDirectory
+          Compress-Archive -LiteralPath (Get-ChildItem -LiteralPath $taskPortableDirectory | Select-Object -ExpandProperty FullName) -DestinationPath (Join-Path $taskReleaseDirectory 'codex-control-center-windows-x64-portable.zip')
+          Get-ChildItem -LiteralPath 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' | Copy-Item -Destination $taskReleaseDirectory
+          $taskHashLines = Get-ChildItem -LiteralPath $taskReleaseDirectory -File | ForEach-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.Name }
+          [IO.File]::WriteAllLines((Join-Path $taskReleaseDirectory 'SHA256SUMS.txt'), $taskHashLines, [Text.UTF8Encoding]::new($false))
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-control-center-windows-x64
+          path: artifacts/release/*
+          if-no-files-found: error
+          retention-days: 14
