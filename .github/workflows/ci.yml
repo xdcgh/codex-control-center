@@ -63,3 +63,5 @@ jobs:
             if ($LASTEXITCODE -eq 0) { throw 'Private user path found in public history' }
             if ($LASTEXITCODE -gt 1) { throw 'History privacy scan failed' }
           }
+          # grep exit 1 means no matches; GitHub's pwsh wrapper propagates it otherwise.
+          exit 0
