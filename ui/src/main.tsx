@@ -1,3 +1,4 @@
+import PageBoundary from "./PageBoundary";
 import { RuntimeDiagnostics } from "./RuntimeDiagnostics";
 import { DatabaseRecovery } from "./DatabaseRecovery";
 import { StatisticsComparison, PerformanceComparison } from "./StatisticsComparison";
@@ -372,7 +373,7 @@ function App() {
             </button>
           </div>
         </header>
-        <div className="content">
+        <div className="content"><PageBoundary key={page} page={page}>
           <div className="page-heading">
             <div>
               <p className="eyebrow">CODEX / {page.toUpperCase()}</p>
@@ -496,6 +497,7 @@ function App() {
             />
           )}
           {page === "Diagnostics" && <Diagnostics s={s} action={action} />}
+        </PageBoundary>
         </div>
       </section>
     </div>

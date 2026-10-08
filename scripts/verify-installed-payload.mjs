@@ -56,22 +56,49 @@ function normalizedExecutable(file, from, to) {
   return { ok: true, sourceCount, targetCount, sha256: createHash('sha256').update(bytes).digest('hex') };
 }
 function parseJson(file) { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+const asciiCase = word => [...word].map(c => /[a-z]/i.test(c) ? `[${c.toLowerCase()}${c.toUpperCase()}]` : c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('');
+const separator = '[\\\\/]';
+const segment = '[^\\\\/\\x00]{1,240}';
 const privatePathPatterns = [
-  /[A-Z]:\\Users\\[^\\\x00]{1,120}\\[^\\\x00]{1,240}/gi,
-  /[A-Z]:\\Documents and Settings\\[^\\\x00]{1,120}\\[^\\\x00]{1,240}/gi,
-  /[A-Z]:\\(?:[^\\\x00]{1,120}\\){1,8}AppData\\[^\\\x00]{1,240}/gi,
+  new RegExp(`[A-Za-z]:${separator}${asciiCase('Users')}${separator}${segment}${separator}${segment}`, 'g'),
+  new RegExp(`[A-Za-z]:${separator}${asciiCase('Documents and Settings')}${separator}${segment}${separator}${segment}`, 'g'),
+  new RegExp(`[A-Za-z]:${separator}(?:${segment}${separator}){1,8}${asciiCase('AppData')}${separator}${segment}`, 'g'),
 ];
-function privateAbsolutePathOccurrences(bytes) {
-  const texts = [bytes.toString('latin1'), bytes.toString('utf16le')]; let count = 0;
-  for (const text of texts) for (const pattern of privatePathPatterns) {
-    pattern.lastIndex = 0;
-    while (pattern.exec(text)) count++;
+function countPathMatches(text, startLimit) {
+  let count = 0;
+  for (const pattern of privatePathPatterns) {
+    pattern.lastIndex = 0; let match;
+    while ((match = pattern.exec(text))) { if (match.index >= startLimit) break; count++; }
   }
   return count;
 }
+function privateAbsolutePathOccurrences(bytes) {
+  return countPathMatches(bytes.toString('latin1'), bytes.length) + countPathMatches(bytes.toString('utf16le'), Math.floor(bytes.length / 2));
+}
+function scanPrivatePaths(file) {
+  const fd = fs.openSync(file, 'r'), size = fs.fstatSync(fd).size, chunkBytes = 64 * 1024, overlapBytes = 8192, stepBytes = chunkBytes - overlapBytes;
+  let occurrences = 0;
+  try {
+    for (let offset = 0; offset < size; offset += stepBytes) {
+      const bytes = Buffer.alloc(Math.min(chunkBytes, size - offset));
+      fs.readSync(fd, bytes, 0, bytes.length, offset);
+      // Count each match only in the non-overlap start region. The overlap retains
+      // any candidate absolute path which crosses a chunk boundary, without decoding
+      // a large arbitrary binary as one UTF-16/ICU string.
+      occurrences += countPathMatches(bytes.toString('latin1'), Math.min(stepBytes, bytes.length));
+      occurrences += countPathMatches(bytes.toString('utf16le'), Math.min(stepBytes / 2, Math.floor(bytes.length / 2)));
+    }
+  } finally { fs.closeSync(fd); }
+  return occurrences;
+}
 function verifyPathScanner() {
-  const sep = String.fromCharCode(92), sample = ['Z:', 'Users', 'fixture-profile', 'AppData', 'Local', 'build-cache'].join(sep);
-  if (!privateAbsolutePathOccurrences(Buffer.from(sample, 'ascii')) || !privateAbsolutePathOccurrences(Buffer.from(sample, 'utf16le'))) throw new Error('private-path-scanner-self-test-failed');
+  const sep = String.fromCharCode(92), samples = [
+    ['Z:', 'Users', 'fixture-profile', 'Documents', 'synthetic', 'build'].join(sep),
+    ['Z:', 'toolchain', 'AppData', 'cache', 'compiler'].join(sep),
+  ];
+  for (const sample of samples) for (const encoding of ['ascii', 'utf16le']) {
+    if (!privateAbsolutePathOccurrences(Buffer.from(sample, encoding))) throw new Error('private-path-scanner-self-test-failed');
+  }
 }
 verifyPathScanner();
 
@@ -131,7 +158,7 @@ const allFiles = [...a.files.values(), ...b.files.values()];
 const privateNameMatches = [...new Set(allFiles.filter(item => privateNamePattern.test(item.relative)).map(item => item.relative.toLowerCase()))];
 let privateAbsolutePathLeakFiles = 0, privateAbsolutePathLeakOccurrences = 0;
 for (const item of allFiles) {
-  const count = privateAbsolutePathOccurrences(fs.readFileSync(item.full));
+  const count = scanPrivatePaths(item.full);
   if (count) { privateAbsolutePathLeakFiles++; privateAbsolutePathLeakOccurrences += count; }
 }
 if (privateNameMatches.length) failures.push(`sensitive-payload-names:${privateNameMatches.length}`);
