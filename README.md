@@ -2,6 +2,8 @@
 
 A local-first Windows control center for OpenAI Codex — quota monitoring, thread/Goal recovery, scheduling, token analytics, performance telemetry, and API-equivalent cost analysis.
 
+Developed by **xudc2 and Codex**. / 由 **xudc2 与 Codex** 开发。
+
 This is an unofficial project, not affiliated with OpenAI. It stores application analytics locally and sends no application telemetry. API-equivalent estimates are based on public API prices and are not Codex subscription bills. Private Desktop protocol compatibility can change; unknown versions must remain in read-only safe mode.
 
 The interface supports Simplified Chinese and English. It follows the Windows UI language automatically, with an explicit language selector in Settings; the tray, widget and notifications follow the same choice. Chinese regional tags use the Simplified Chinese catalog, and unsupported languages fall back to English.

@@ -1141,6 +1141,11 @@ function Settings({
           {t("Closing a window hides it to the tray. Use the tray menu to exit the UI or stop the background service.")}
         </p>
       </section>
+      <section className="panel">
+        <h2>{t("About")}</h2>
+        <p>Codex Control Center · 0.1.0</p>
+        <p className="caption">{t("Developed by xudc2 and Codex")}</p>
+      </section>
     </div>
   );
 }

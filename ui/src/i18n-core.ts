@@ -1,5 +1,7 @@
 /** English text is the stable catalog key; protocol IDs never pass through translation implicitly. */
 export const catalog = {
+  "About": "关于",
+  "Developed by xudc2 and Codex": "由 xudc2 与 Codex 开发",
   "Unavailable": "不可用",
   "Working": "运行中",
   "Waiting for quota": "等待额度",
