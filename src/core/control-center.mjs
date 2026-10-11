@@ -1,8 +1,24 @@
+import { createHmac,randomBytes } from 'node:crypto';
 import { WatchdogEngine } from '../engine.mjs';
 import { assess, quotaStatus, isUuid, goalIdentity, latestTurn } from '../policy.mjs';
 
 export const DEFAULT_SETTINGS = Object.freeze({ recoveryPollSeconds: 10, historySampleSeconds: 60, maxConcurrentResumes: 1, reservePercent: 10, maxRetries: 3, cooldownSeconds: 30, autoResume: false });
 export const CONTINUATION_TEXT = 'Codex Control Center：实时额度查询已确认所有阻塞窗口可用。请在本聊天继续原有未完成工作；先核对当前进度、工作区和仍在运行的后台命令，接续尚未完成的步骤。保留原目标、模型、权限与预算；若已经完成或需要用户决定，请说明并停止。';
+export function observedTurnContext(state,turn,{threadId,salt}={}) {
+ const canonical=state.turnHistory?.kind==='canonical'&&latestTurn(state)?.turnId===turn?.turnId;
+ const started=Number.isSafeInteger(turn?.turnStartedAtMs)&&turn.turnStartedAtMs>=0?turn.turnStartedAtMs:null;
+ const ended=Number.isSafeInteger(turn?.turnEndedAtMs)&&turn.turnEndedAtMs>=0?turn.turnEndedAtMs:null;
+ const metadata={collaborationMode:typeof state.latestCollaborationMode?.mode==='string'?state.latestCollaborationMode.mode:undefined,modelContextWindow:Number.isSafeInteger(state.modelContextWindow)&&state.modelContextWindow>0?state.modelContextWindow:undefined,turnStartedAtMs:started,turnCompletedAtMs:ended,kind:null,goalId:null,goalAttributionReason:'goal-state-not-observed'};
+ if(!canonical){metadata.goalAttributionReason='canonical-turn-relation-unavailable';return metadata;}
+ if(!Object.hasOwn(state,'threadGoal'))return metadata;
+ if(state.threadGoal===null){metadata.kind='ordinary';metadata.goalAttributionReason='explicit-no-current-goal';return metadata;}
+ const goal=state.threadGoal,created=Number.isSafeInteger(goal?.createdAt)&&goal.createdAt>=0?goal.createdAt*1000:null;
+ if(created==null||started==null){metadata.goalAttributionReason='goal-or-turn-start-time-unavailable';return metadata;}
+ if(started<created){metadata.goalAttributionReason='turn-predates-current-goal';return metadata;}
+ if(!['active','usageLimited'].includes(goal.status)){metadata.goalAttributionReason='goal-not-active-turn-relation-unproven';return metadata;}
+ if(typeof goal.objective!=='string'||!goal.objective||!salt){metadata.goalAttributionReason='goal-identity-unavailable';return metadata;}
+ metadata.kind='goal';metadata.goalId='goal-'+createHmac('sha256',salt).update(JSON.stringify([threadId,goalIdentity(goal)])).digest('hex').slice(0,32);metadata.goalAttributionReason='canonical-turn-starts-within-current-active-goal';return metadata;
+}
 export function validateSettings(value) {
   const s = { ...DEFAULT_SETTINGS, ...value };
   if (![5,10,30,60].includes(s.recoveryPollSeconds) || !Number.isInteger(s.historySampleSeconds) || s.historySampleSeconds < 60 || !Number.isInteger(s.maxConcurrentResumes) || s.maxConcurrentResumes < 1 || s.maxConcurrentResumes > 20 || !Number.isFinite(s.reservePercent) || s.reservePercent < 0 || s.reservePercent >= 100 || !Number.isInteger(s.maxRetries) || s.maxRetries < 1 || s.maxRetries > 100 || !Number.isFinite(s.cooldownSeconds) || s.cooldownSeconds < 0 || typeof s.autoResume !== 'boolean') throw new Error('invalid-core-settings');
@@ -145,7 +161,7 @@ export class ControlCenterCore {
             record.metadataSource='verified-desktop-ipc';
             delete record.unavailableReason;
           }
-          if(this.observability&&turn?.turnId){void this.observability.call('observe-turn',{threadId:id,turnId:turn.turnId,model:typeof state.latestModel==='string'?state.latestModel:undefined,rawServiceTier:turn.params?.serviceTier??state.latestThreadSettings?.serviceTier,effort:state.latestReasoningEffort,observedAt:this.now(),source:this.adapter.source==='official-app-server'?'desktop-ipc':this.adapter.source}).catch(()=>{});}
+          if(this.observability&&turn?.turnId){let salt=this.store.getSetting('observability:goal-key-salt',null);if(!salt){salt=randomBytes(32).toString('hex');this.store.setSetting('observability:goal-key-salt',salt);}const context=observedTurnContext(state,turn,{threadId:id,salt});if(record)record.goalAttribution={status:context.kind==='goal'?'Observed':context.kind==='ordinary'?'Not a Goal':'Unavailable',reason:context.goalAttributionReason};void this.observability.call('observe-turn',{threadId:id,turnId:turn.turnId,...context,model:typeof state.latestModel==='string'?state.latestModel:undefined,rawServiceTier:turn.params?.serviceTier??state.latestThreadSettings?.serviceTier,effort:state.latestReasoningEffort,observedAt:this.now(),source:this.adapter.source==='official-app-server'?'desktop-ipc':this.adapter.source}).catch(()=>{});}
           if (record && decision.action === 'wait' && ['approval-or-input-pending','user-message-pending','goal-user-confirmation'].includes(decision.reason)) { this.engine.transition(record,'needsUser',decision.reason); }
         } catch (error) {
           if (!['no-client-found','desktop-snapshot-timeout','desktop-read-compatibility-unverified'].includes(error.message)) throw error;

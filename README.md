@@ -6,6 +6,10 @@ This is an unofficial project, not affiliated with OpenAI. It stores application
 
 Development follows the [roadmap](ROADMAP.md). [Progress and validation](PROGRESS.md) distinguish implemented features, isolated tests, live Desktop checks, and the natural quota cycle. A working GUI alone is not release acceptance.
 
+![Installed dashboard with task identities hidden](docs/screenshots/dashboard.png)
+
+The screenshot shows an actual installed Windows build in privacy mode. Quota values are a dated observation, not sample data or a subscription-to-token conversion.
+
 ## Development
 
 Node.js 24 or newer is required by the retained recovery engine and built-in SQLite integration.

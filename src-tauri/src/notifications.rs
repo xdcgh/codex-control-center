@@ -29,7 +29,13 @@ impl Planner{
    }
   }
   if maximum.is_some(){self.last_event=maximum;}
-  if let Some(report)=natural{if report["json"]["status"]=="PASS"{self.add(&mut out,"naturalCycle",report["json"]["cycles"].to_string(),"Natural Codex quota cycle completed","Real exhaustion, recovery, resumption and task completion were observed.");}}
+  if let Some(report)=natural{if report["json"]["schemaVersion"]==1{if let Some(cycles)=report["json"]["cycles"].as_array(){for cycle in cycles{
+   // Only full recorder PASS means real provenance and final task/Goal outcome;
+   // an episode PASS while the Goal is pending is deliberately insufficient.
+   if cycle["status"]=="PASS"{if let Some(fingerprint)=cycle["cycleFingerprint"].as_str().filter(|id|!id.is_empty()){
+    self.add(&mut out,"naturalCycle",fingerprint.to_string(),"Natural Codex quota cycle completed","Real exhaustion, recovery, resumption and task completion were observed.");
+   }}
+  }}}}
   out
  }
 }
@@ -37,5 +43,6 @@ impl Planner{
  use super::*;use serde_json::json;
  #[test]fn toggles_are_independent_and_master_disables_all(){let prefs=json!({"notifications":true,"notificationTypes":{"quotaExhausted":false}});assert!(!Planner::enabled(&prefs,"quotaExhausted"));assert!(Planner::enabled(&prefs,"threadResumed"));assert!(!Planner::enabled(&json!({"notifications":false}),"threadResumed"));}
  #[test]fn actual_transitions_and_events_are_not_repeated(){let mut planner=Planner::default();let ready=json!({"quota":{"ready":true,"known":true},"compatibility":{"verified":true},"lastQuotaPollAt":1});assert!(planner.plan(None,&ready,&[json!({"id":1,"event":"auto-resumed"})],None).is_empty());let limited=json!({"quota":{"ready":false,"known":true},"compatibility":{"verified":true},"lastQuotaPollAt":2});let events=vec![json!({"id":2,"event":"auto-resumed","details":{"manual":false}})];let notices=planner.plan(Some(&ready),&limited,&events,None);assert_eq!(notices.len(),2);assert!(planner.plan(Some(&limited),&limited,&events,None).is_empty());}
- #[test]fn pending_or_simulated_natural_reports_never_notify_completion(){let mut planner=Planner::default();let current=json!({"compatibility":{"verified":true}});for status in ["INCOMPLETE","SIMULATED","UNKNOWN"]{assert!(planner.plan(None,&current,&[],Some(&json!({"json":{"status":status}}))).is_empty());}let pass=json!({"json":{"status":"PASS","cycles":[{"cycleFingerprint":"synthetic-unit-only"}]}});assert_eq!(planner.plan(None,&current,&[],Some(&pass)).len(),1);assert!(planner.plan(None,&current,&[],Some(&pass)).is_empty());}
+ #[test]fn pending_or_simulated_natural_reports_never_notify_completion(){let mut planner=Planner::default();let current=json!({"compatibility":{"verified":true}});for status in ["INCOMPLETE","SIMULATED","UNKNOWN"]{let report=json!({"json":{"schemaVersion":1,"status":status,"cycles":[{"cycleFingerprint":"unit-pending","status":status,"episode":{"status":"PASS"},"goalOutcome":"PENDING"}]}});assert!(planner.plan(None,&current,&[],Some(&report)).is_empty());}let pass=json!({"json":{"schemaVersion":1,"status":"PASS","cycles":[{"cycleFingerprint":"unit-completed","status":"PASS","goalOutcome":"COMPLETED"}]}});assert_eq!(planner.plan(None,&current,&[],Some(&pass)).len(),1);assert!(planner.plan(None,&current,&[],Some(&pass)).is_empty());}
+ #[test]fn a_completed_cycle_notifies_once_even_when_historical_cycles_failed(){let mut planner=Planner::default();let current=json!({"compatibility":{"verified":true}});let mixed=json!({"json":{"schemaVersion":1,"status":"FAIL","cycles":[{"cycleFingerprint":"old-failed","status":"FAIL"},{"cycleFingerprint":"new-completed","status":"PASS","goalOutcome":"COMPLETED"},{"cycleFingerprint":"still-pending","status":"INCOMPLETE","episode":{"status":"PASS"},"goalOutcome":"PENDING"},{"cycleFingerprint":"simulated","status":"SIMULATED"}]}});let notices=planner.plan(None,&current,&[],Some(&mixed));assert_eq!(notices.len(),1);assert_eq!(notices[0].kind,"naturalCycle");assert!(planner.plan(None,&current,&[],Some(&mixed)).is_empty());let later=json!({"json":{"schemaVersion":1,"status":"INCOMPLETE","cycles":[{"cycleFingerprint":"new-completed","status":"PASS"},{"cycleFingerprint":"second-completed","status":"PASS"}]}});assert_eq!(planner.plan(None,&current,&[],Some(&later)).len(),1);}
 }

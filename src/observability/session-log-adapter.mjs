@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { digest, normalizeServiceTier } from './pricing.mjs';
+import { observedGoalRelation, safeGoalId } from './metadata.mjs';
 
 export const tokenFields = ['input_tokens','cached_input_tokens','cache_write_input_tokens','output_tokens','reasoning_output_tokens','total_tokens'];
 export const tokens = value => Object.fromEntries(tokenFields.map(k => [k, Number.isSafeInteger(value?.[k]) && value[k] >= 0 ? value[k] : null]));
@@ -58,16 +59,17 @@ export class SessionLogAdapter {
     const p=event.payload ?? {}, timestamp=Date.parse(event.timestamp);
     if (event.type==='session_meta') { meta.threadId=scalar(p.id); meta.workspace=scalar(p.cwd); meta.provider=scalar(p.model_provider);meta.parentThreadId=scalar(p.parent_thread_id);meta.forkedHistory=!!(p.forked_from_id??p.forked_from);meta.modelContextWindow=Number.isSafeInteger(p.context_window)&&p.context_window>0?p.context_window:null; return; }
     if (event.type==='turn_context') {
-      meta.turnId=scalar(p.turn_id); meta.model=scalar(p.model); meta.effort=scalar(p.effort ?? p.reasoning_effort); meta.serviceTier=scalar(p.service_tier); meta.provider=scalar(p.model_provider) ?? meta.provider; meta.workspace=scalar(p.cwd) ?? meta.workspace; meta.goalId=scalar(p.goal_id);meta.collaborationMode=scalar(p.collaboration_mode?.mode);meta.rootTurnId=scalar(p.root_turn_id);
+      meta.turnId=scalar(p.turn_id); meta.model=scalar(p.model); meta.effort=scalar(p.effort ?? p.reasoning_effort); meta.serviceTier=scalar(p.service_tier); meta.provider=scalar(p.model_provider) ?? meta.provider; meta.workspace=scalar(p.cwd) ?? meta.workspace; meta.goalId=safeGoalId(p.goal_id);meta.collaborationMode=scalar(p.collaboration_mode?.mode);meta.rootTurnId=scalar(p.root_turn_id);
       if(meta.threadId && meta.turnId) this.store.db.prepare('INSERT OR REPLACE INTO turns VALUES(?,?,?)').run(meta.turnId,meta.threadId,JSON.stringify({...meta,timestamp:Number.isFinite(timestamp)?timestamp:null})); return;
     }
     if (!meta.threadId || !Number.isFinite(timestamp)) return;
     const type=p.type ?? event.type;
     const turnId=scalar(p.turn_id)??meta.turnId??null;
     const history=this.store.getSetting('observability:turn-metadata:'+digest([meta.threadId,turnId]),[]);
-    const observed=history.filter(m=>m.observedAt<=timestamp).at(-1)?.metadata;
+    const observed=history.filter(m=>m.observedAt<=timestamp).sort((a,b)=>a.observedAt-b.observedAt).at(-1)?.metadata;
+    const relation=meta.goalId?{kind:'goal',goalId:meta.goalId,goalRelationReason:'session-log-goal-identifier',goalRelationQuality:'Observed'}:observedGoalRelation(observed);
     const provider=scalar(p.model_provider)??meta.provider??observed?.provider??null,loggedTier=scalar(p.service_tier)??meta.serviceTier??null,rawServiceTier=loggedTier??observed?.rawServiceTier??null;
-    const base={threadId:meta.threadId,turnId,rootTurnId:scalar(p.root_turn_id)??meta.rootTurnId??null,parentThreadId:meta.parentThreadId??null,forkedHistory:!!meta.forkedHistory,collaborationMode:meta.collaborationMode??observed?.collaborationMode??null,model:scalar(p.model)??meta.model??observed?.model??null,provider,rawServiceTier,serviceTier:normalizeServiceTier(rawServiceTier,provider),tierEvidence:loggedTier?'session-log-field':rawServiceTier?'observed-turn-settings':null,effort:meta.effort??observed?.effort??null,workspace:meta.workspace??null,goalId:meta.goalId??observed?.goalId??null,kind:meta.goalId?'goal':observed?.kind??null,turnStartedAtMs:observed?.turnStartedAtMs??null,turnCompletedAtMs:observed?.turnCompletedAtMs??null,timestamp,source:'local-session-log'};
+    const base={threadId:meta.threadId,turnId,rootTurnId:scalar(p.root_turn_id)??meta.rootTurnId??null,parentThreadId:meta.parentThreadId??null,forkedHistory:!!meta.forkedHistory,collaborationMode:meta.collaborationMode??observed?.collaborationMode??null,model:scalar(p.model)??meta.model??observed?.model??null,provider,rawServiceTier,serviceTier:normalizeServiceTier(rawServiceTier,provider),tierEvidence:loggedTier?'session-log-field':rawServiceTier?'observed-turn-settings':null,effort:meta.effort??observed?.effort??null,workspace:meta.workspace??null,...relation,turnStartedAtMs:observed?.turnStartedAtMs??null,turnCompletedAtMs:observed?.turnCompletedAtMs??null,timestamp,source:'local-session-log'};
     if (type==='token_count' || type==='token_usage' || type==='token_usage_record') {
       const info=p.info ?? p, responseId=scalar(p.response_id ?? info.response_id), id=digest({thread:meta.threadId,responseId,event:responseId?null:event});
       if(this.store.db.prepare('SELECT 1 FROM token_usage WHERE id=?').get(id)) return;

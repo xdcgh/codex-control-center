@@ -1,5 +1,7 @@
 import { SessionLogAdapter, tokenFields } from './session-log-adapter.mjs';
 import { PricingPolicy, normalizeServiceTier, digest } from './pricing.mjs';
+import { observedGoalRelation } from './metadata.mjs';
+export { GOAL_RELATION_REASONS } from './metadata.mjs';
 export { SessionLogAdapter } from './session-log-adapter.mjs';
 export { PricingPolicy, validatePricing, normalizeServiceTier } from './pricing.mjs';
 
@@ -19,13 +21,13 @@ export class ObservabilityService {
     this.store=store;this.now=now;this.adapter=new SessionLogAdapter({store,codexHome,now});this.pricing=new PricingPolicy({store,policy});
   }
   poll() { return this.adapter.poll(); }
-  observeTurnMetadata({threadId,turnId,model,provider,rawServiceTier,effort,collaborationMode,kind,goalId,modelContextWindow,turnStartedAtMs,turnCompletedAtMs,observedAt=this.now(),source}={}) {
+  observeTurnMetadata({threadId,turnId,model,provider,rawServiceTier,effort,collaborationMode,kind,goalId,goalRelationReason,goalAttributionReason,modelContextWindow,turnStartedAtMs,turnCompletedAtMs,observedAt=this.now(),source}={}) {
     if(!['desktop-ipc','official-app-server'].includes(source)||typeof threadId!=='string'||typeof turnId!=='string'||!Number.isSafeInteger(observedAt)) throw new Error('invalid-observed-turn-metadata');
     const safe=v=>typeof v==='string'&&/^[a-zA-Z0-9._-]{1,128}$/.test(v)?v:null;
     const number=v=>Number.isSafeInteger(v)&&v>=0?v:null;
-    const metadata={model:safe(model),provider:safe(provider),rawServiceTier:safe(rawServiceTier),effort:safe(effort),collaborationMode:safe(collaborationMode),kind:['goal','ordinary'].includes(kind)?kind:null,goalId:safe(goalId),modelContextWindow:number(modelContextWindow)>0?number(modelContextWindow):null,turnStartedAtMs:number(turnStartedAtMs),turnCompletedAtMs:number(turnCompletedAtMs),source};
+    const metadata={model:safe(model),provider:safe(provider),rawServiceTier:safe(rawServiceTier),effort:safe(effort),collaborationMode:safe(collaborationMode),...observedGoalRelation({kind,goalId,goalRelationReason,goalAttributionReason}),modelContextWindow:number(modelContextWindow)>0?number(modelContextWindow):null,turnStartedAtMs:number(turnStartedAtMs),turnCompletedAtMs:number(turnCompletedAtMs),source};
     const key='observability:turn-metadata:'+digest([threadId,turnId]),history=this.store.getSetting(key,[]);
-    if(JSON.stringify(history.at(-1)?.metadata)!==JSON.stringify(metadata)) { history.push({observedAt,metadata});this.store.setSetting(key,history); }
+    if(JSON.stringify(history.at(-1)?.metadata)!==JSON.stringify(metadata)) { history.push({observedAt,metadata});history.sort((a,b)=>a.observedAt-b.observedAt);this.store.setSetting(key,history); }
     return {recorded:true,source,scope:'exact-turn; only subsequent events are enriched'};
   }
   rows(table) { return this.store.db.prepare(`SELECT metadata_json FROM ${table}`).all().map(r=>JSON.parse(r.metadata_json)); }
@@ -49,7 +51,8 @@ export class ObservabilityService {
       const mapKey=JSON.stringify([key,ledger]);
       if(!groups.has(mapKey)) groups.set(mapKey,{key,ledger,samples:0,tokens:Object.fromEntries(tokenFields.map(k=>[k,0])),missing:Object.fromEntries(tokenFields.map(k=>[k,0])),inventoryValues:Object.fromEntries(tokenFields.map(k=>[k,[]])),estimatedUsd:0,pricedSamples:0,partialPriceSamples:0,pricingReasons:{},actualRequestInputs:[],latestSampleInputs:[],longContextSamples:0,unknownContextSamples:0,discontinuities:0});
       const g=groups.get(mapKey);g.samples++;g.discontinuities+=Number(e.discontinuity);
-      g.turnTotals??=new Map();g.costValues??=[];g.contextWindows??=[];g.collaborationModeCounts??={};g.kindCounts??={};g.tierRequestCounts??={fast:0,standard:0,other:0,unknown:0};g.requestCount??=0;g.longContextRequests??=0;g.unknownRequestContext??=0;
+      g.turnTotals??=new Map();g.costValues??=[];g.contextWindows??=[];g.collaborationModeCounts??={};g.kindCounts??={};g.goalRelationReasons??={};g.goalRelationQualities??={};g.tierRequestCounts??={fast:0,standard:0,other:0,unknown:0};g.requestCount??=0;g.longContextRequests??=0;g.unknownRequestContext??=0;
+      const relation=e.goalRelationReason??'goal-relation-not-observed',quality=e.goalRelationQuality??'Unavailable';g.goalRelationReasons[relation]=(g.goalRelationReasons[relation]??0)+1;g.goalRelationQualities[quality]=(g.goalRelationQualities[quality]??0)+1;
       const kind=e.kind??'Unknown';g.kindCounts[kind]=(g.kindCounts[kind]??0)+1;
       const mode=e.collaborationMode??'Unknown';g.collaborationModeCounts[mode]=(g.collaborationModeCounts[mode]??0)+1;
       if(Number.isSafeInteger(e.modelContextWindow)&&e.modelContextWindow>0)g.contextWindows.push(e.modelContextWindow);
