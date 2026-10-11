@@ -78,3 +78,7 @@ The [legacy cycle observed on 2026-10-07](docs/evidence/legacy-natural-cycle-202
 - Retain private raw evidence locally under the operator's control. Public evidence should contain only timestamps, version identifiers, model ID, window percentages/reset timestamps, safe state labels, redacted receipts and outcome.
 - Record detection and resume latency separately. Do not include a polling wait in TTFT or claim server-side model timing from client notifications.
 - Link any fixture/simulation run in a different report and label it `SIMULATED`; it cannot satisfy this natural-cycle acceptance record.
+
+## Preview acceptance scope - 2026-10-11
+
+At the installed `704b256` read-only checkpoint, five recorded cycles still had PENDING Goal outcomes; four had resume timestamps and the aggregate report remained FAIL because it includes historical failed episodes. No complete natural-cycle pass is claimed. The project owner accepted this evidence limit for the v0.1.0 preview, so it does not block publication. This acceptance does not change the recorder's results or replace missing observations with simulated evidence.
