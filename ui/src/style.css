@@ -690,6 +690,7 @@ td small {
   overflow: hidden;
 }
 .mini-header {
+  flex-shrink: 0;
   height: 54px;
   display: flex;
   align-items: center;
@@ -721,18 +722,23 @@ td small {
 }
 .mini-body {
   padding: 20px 17px;
-  flex: 1;
-  overflow: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
 }
 .mini-quota {
-  display: flex;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) 40px;
   align-items: center;
   gap: 10px;
   margin-bottom: 19px;
   font-size: 12px;
 }
 .mini-quota b {
-  width: 22px;
+  width: auto;
+  white-space: nowrap;
   font-weight: 500;
   color: var(--muted);
 }
@@ -769,6 +775,7 @@ td small {
   font-size: 10px;
 }
 .mini-task {
+  overflow-wrap: anywhere;
   margin: 15px 0 5px;
   font-size: 12px;
 }
@@ -778,11 +785,15 @@ td small {
 }
 .mini-footer {
   display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
   gap: 3px;
   border-top: 1px solid var(--border);
   padding: 8px 10px;
 }
 .mini-footer button {
+  flex-shrink: 0;
+  white-space: nowrap;
   font-size: 9px;
   border: none;
   background: transparent;

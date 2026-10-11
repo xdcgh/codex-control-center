@@ -8,7 +8,9 @@ The interface supports Simplified Chinese and English. It follows the Windows UI
 
 Development follows the [roadmap](ROADMAP.md). [Progress and validation](PROGRESS.md) distinguish implemented features, isolated tests, live Desktop checks, and the natural quota cycle. A working GUI alone is not release acceptance.
 
-![Installed dashboard with task identities hidden](docs/screenshots/dashboard.png)
+![Installed Chinese dashboard with task identities hidden](docs/screenshots/dashboard-zh-CN.png)
+
+[English dashboard](docs/screenshots/dashboard-en.png)
 
 The screenshot shows an actual installed Windows build in privacy mode. Quota values are a dated observation, not sample data or a subscription-to-token conversion.
 

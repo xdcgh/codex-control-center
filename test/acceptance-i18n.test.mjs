@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  catalog, resolveLocale, translate, localizeValue, formatNumber, formatDate,
+  catalog, resolveLocale, translate, localizeValue, localizeOwnedValue, formatNumber, formatDate,
 } from '../ui/src/i18n-core.ts';
 
 test('system language and manual override resolve deterministically', () => {
@@ -48,4 +48,16 @@ test('formatting and parameterized messages retain missing-data quality', () => 
   assert.equal(translate('Next check in {seconds}s', 'zh-CN', { seconds: 15 }), '15 秒后再次检查');
   assert.equal(translate('Next check in {seconds}s', 'zh-CN'), '{seconds} 秒后再次检查');
   assert.equal(translate('Next check in {seconds}s', 'en', { seconds: 15 }), 'Next check in 15s');
+});
+
+test('field-scoped product states explain verified enums and preserve unknown values', () => {
+ assert.equal(localizeOwnedValue('taskReason','running','zh-CN'),'运行中');
+ assert.equal(localizeOwnedValue('taskReason','running','en'),'Working');
+ assert.equal(localizeOwnedValue('taskReason','goal-budgetLimited','zh-CN'),'Goal Token 预算已耗尽');
+ assert.equal(localizeOwnedValue('collaboration','default','zh-CN'),'默认模式');
+ assert.equal(localizeOwnedValue('runtime','active','zh-CN'),'活跃');
+ assert.equal(localizeOwnedValue('goalRelation','canonical-turn-starts-within-current-active-goal','zh-CN'),'标准轮次开始于当前活动 Goal 内');
+ for(const field of ['taskReason','collaboration','runtime','goalRelation','inventory'])assert.equal(localizeOwnedValue(field,'vendor/unrecognized-value','zh-CN'),'vendor/unrecognized-value');
+ assert.equal(localizeValue('default','zh-CN'),'default');
+ assert.equal(localizeValue('running','zh-CN'),'running');
 });

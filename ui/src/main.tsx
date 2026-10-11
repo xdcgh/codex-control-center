@@ -1,3 +1,4 @@
+import {localizeOwnedValue} from "./i18n-core";
 import {t, display, locale, numberText, dateText, errorText, useLocale, setLocalePreferences} from "./i18n";
 import PageBoundary from "./PageBoundary";
 import { RuntimeDiagnostics } from "./RuntimeDiagnostics";
@@ -678,7 +679,7 @@ function ThreadList({
               <p className="caption">
                 {t("Last observed")} {time(task.lastActivityAt)} {t("· Retries")}{" "}
                 {number(task.policy.retryCount)}/{number(task.policy.maxRetries)} ·{" "}
-                {display(task.reason)}
+                {localizeOwnedValue("taskReason",task.reason,locale())}
               </p>
             )}
             {!compact&&<ThreadDetails task={task} privacy={prefs?.privacy??true}/>}
@@ -1332,7 +1333,7 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
                         ? t("Private group")
                         : typeof g.key === "object"
                           ? JSON.stringify(g.key)
-                          : String(g.key)}
+                          : baselineGroup(g)?localizeOwnedValue("inventory",String(g.key),locale()):groupBy==="collaboration"?localizeOwnedValue("collaboration",String(g.key),locale()):String(g.key)}
                       <small>{g.ledger}</small>
                     </td>
                     {[
