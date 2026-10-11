@@ -1,42 +1,110 @@
-# Codex Control Center
+<div align="center">
 
-[简体中文](README.md) | **English**
+<img src="docs/assets/cover-en.svg" alt="Codex Control Center — Your Codex workspace, in view" width="1280" />
 
-A local-first Windows control center for OpenAI Codex — quota monitoring, thread/Goal recovery, scheduling, token analytics, performance telemetry, and API-equivalent cost analysis.
+<p><a href="README.md">简体中文</a> · <strong>English</strong></p>
 
-Developed by **xudc2 and Codex**.
+<p>
+  <a href="https://github.com/xdcgh/codex-control-center/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/release-v0.1.0%20preview-66dbc3?style=flat-square&amp;labelColor=18232c" alt="v0.1.0 preview release" /></a>
+  <a href="docs/build.md"><img src="https://img.shields.io/badge/Windows-x64-9aaec0?style=flat-square&amp;labelColor=18232c" alt="Windows x64" /></a>
+  <a href="https://github.com/xdcgh/codex-control-center/actions/workflows/ci.yml"><img src="https://github.com/xdcgh/codex-control-center/actions/workflows/ci.yml/badge.svg?branch=codex%2Fcontrol-center" alt="Core validation workflow status" /></a>
+  <a href="README.md"><img src="https://img.shields.io/badge/UI-zh--CN%20%2F%20en-66dbc3?style=flat-square&amp;labelColor=18232c" alt="Simplified Chinese and English interface" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-9aaec0?style=flat-square&amp;labelColor=18232c" alt="MIT license" /></a>
+</p>
 
-This is an unofficial project, not affiliated with OpenAI. It stores application analytics locally and sends no application telemetry. API-equivalent estimates are based on public API prices and are not Codex subscription bills. Private Desktop protocol compatibility can change; unknown versions must remain in read-only safe mode.
+<p><strong>A local-first Windows control center for Codex quota, tasks and observations.</strong></p>
 
-The interface supports Simplified Chinese and English. It follows the Windows UI language automatically, with an explicit language selector in Settings; the tray, widget and notifications follow the same choice. Chinese regional tags use the Simplified Chinese catalog, and unsupported languages fall back to English.
+<p>
+  <a href="https://github.com/xdcgh/codex-control-center/releases/download/v0.1.0/Codex-Control-Center_0.1.0_x64-setup.exe"><strong>Windows installer</strong></a> ·
+  <a href="https://github.com/xdcgh/codex-control-center/releases/download/v0.1.0/Codex-Control-Center_0.1.0_windows-x64-portable.zip"><strong>Portable ZIP</strong></a> ·
+  <a href="https://github.com/xdcgh/codex-control-center/releases/download/v0.1.0/SHA256SUMS.txt">SHA256 checksums</a> ·
+  <a href="https://github.com/xdcgh/codex-control-center/releases/tag/v0.1.0">Release notes</a>
+</p>
 
-Development follows the [roadmap](ROADMAP.md). [Progress and validation](PROGRESS.md) distinguish implemented features, isolated tests, live Desktop checks, and the natural quota cycle. A working GUI alone is not release acceptance.
+<sub>Unofficial; not affiliated with OpenAI · Application analytics stay on your PC; no application telemetry is sent</sub>
 
-![Installed English dashboard with task identities hidden](docs/screenshots/dashboard-en.png)
+</div>
 
-[Chinese dashboard](docs/screenshots/dashboard-zh-CN.png)
+## The actual app
 
-The screenshot shows an actual installed Windows build in privacy mode. Quota values are a dated observation, not sample data or a subscription-to-token conversion.
+![Installed English dashboard with task identities hidden in privacy mode](docs/screenshots/dashboard-en.png)
 
-## Development
+<sub>Captured from an installed Windows build. Values reflect only that observation. <a href="docs/screenshots/dashboard-zh-CN.png">View the Chinese interface →</a></sub>
 
-Node.js 24 or newer is required by the retained recovery engine and built-in SQLite integration.
+## Six views. One control center.
+
+<table>
+  <tr>
+    <td><strong>◈ Quota &amp; recovery</strong><br />Observe real limits and reset times. Resume eligible original tasks after fresh-state checks.</td>
+    <td><strong>☷ Threads &amp; Goals</strong><br />Keep the original thread, Goal and budget. Manage the queue with priority, reserve and concurrency controls.</td>
+  </tr>
+  <tr>
+    <td><strong>◇ Tokens &amp; estimates</strong><br />View official account activity separately from local ledgers. Estimate API-equivalent costs with versioned pricing.</td>
+    <td><strong>◴ Performance &amp; activity</strong><br />Explore observed turn performance and tool activity. Missing coverage is explicitly unavailable.</td>
+  </tr>
+  <tr>
+    <td><strong>⌘ Tray &amp; widget</strong><br />Keep status close without leaving the main window open. Use system-language selection or a manual override.</td>
+    <td><strong>⚙ Diagnostics &amp; controls</strong><br />Inspect data sources and compatibility. Manage recovery, notifications, privacy and database backups.</td>
+  </tr>
+</table>
+
+> API-equivalent estimates are not Codex subscription bills. Unknown versions remain read-only; missing data stays Partial or Unavailable.
+
+## Start in three steps
+
+1. **Download and verify** — Choose the Windows x64 installer or portable ZIP above. Check the file against `SHA256SUMS.txt`.
+2. **Install or extract** — Run the installer, or extract the complete portable folder and launch its app. The runtime includes Node; no development toolchain is needed.
+3. **Connect your existing Codex** — Open Codex Desktop and sign in, then launch the control center. The interface follows Windows language settings by default; enable automatic recovery in Settings when needed.
+
+This is an **unsigned preview**. When migrating an existing watchdog, follow the [migration guide](docs/baseline.md) first and retain a single background execution owner.
+
+## Documentation & help
+
+**Usage & security** · [Release notes](https://github.com/xdcgh/codex-control-center/releases/tag/v0.1.0) · [Security policy](SECURITY.md) · [Report an issue](https://github.com/xdcgh/codex-control-center/issues)
+
+**Explore the project** · [Roadmap](ROADMAP.md) · [Progress](PROGRESS.md) · [Validation](docs/validation.md) · [Requirement audit](docs/acceptance-audit.md)
+
+**Development** · [Windows builds](docs/build.md) · [Architecture](docs/adr/001-desktop-stack.md) · [Migration baseline](docs/baseline.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
+
+<details>
+<summary><strong>Development & technical design</strong></summary>
+
+Tauri 2 / Rust handles windows, tray, notifications and startup; React / TypeScript provides the interface. Node.js 24 and SQLite retain the verified recovery core. Use the repository lockfiles:
 
 ```powershell
-npm install
-npm test
+npm ci
+npm run ui:build
 ```
 
-The original recovery engine remains in `src/`, with its original test suite in `test/`. The original installed watchdog is retained separately during development. The [migration baseline](docs/baseline.md) records provenance and rollback. The [historical watchdog guide](docs/legacy-watchdog.md) describes the baseline behavior, including its old reset buffer.
+See [Windows build instructions](docs/build.md) for native builds and the protected test-helper setup required by `npm test`. Development needs Node.js 24+, Rust, MSVC / Windows SDK and WebView2; end users do not need to install Node or Rust separately.
 
-Core v2 polls actual quota every 10 seconds by default, saves quota history independently every 60 seconds, and resumes eligible work without a reset buffer. Both short and weekly blocking windows must be available. Fresh-state/Goal checks and the durable send ledger prevent unsafe repeat dispatch; priority, quota reserve, concurrency and manual controls guard the queue. Unknown Desktop versions leave monitoring available and disable automatic writes.
+Core v2 checks real quota every **10 seconds** by default and samples quota history independently every **60 seconds**, without an added reset buffer. All blocking windows must be available. Fresh Thread / Goal checks and a durable send ledger prevent unsafe repeat dispatch. Manual pauses, budget limits and user-decision boundaries remain effective.
 
-The desktop application includes a quota dashboard/history, Thread/Goal policies, token and performance views, diagnostics, tray and widget. Pricing uses versioned public-source snapshots; missing telemetry stays Partial or Unavailable. Independent tests, actual Desktop smokes and installed-application evidence are recorded in [validation](docs/validation.md), with their source stages and limits.
+Official app-server reads take priority. Continuing an original thread uses isolated, version-verified Desktop IPC; unknown versions keep read-only monitoring available and disable unverified writes. The retained engine is in `src/`, and tests are in `test/`. The [historical watchdog guide](docs/legacy-watchdog.md) documents earlier behavior, including its reset buffer.
 
-The installed `704b256` preview includes a diagnostics source inventory, on-demand official account activity, current Goal counters, future-event repository grouping and bounded tool observations. Account activity and local token ledgers remain separate; missing coverage is shown as unavailable. The 199-test Windows Node suite and both GitHub CI workflows passed. Its actual installer and extracted portable payload passed 45-file verification, and the new pages were reviewed in Chinese and English.
+A gap between a tool request and its output means a pending request, not authoritative execution. Inactivity hints are heuristic and never initiate recovery. Official account activity is not merged with local token ledgers; raw speed values are not claimed as served service tiers or model decode speed.
 
-The public repository and Windows/Linux CI are active. The [v0.1.0 preview release](https://github.com/xdcgh/codex-control-center/releases/tag/v0.1.0) contains the verified unsigned installer, portable ZIP and checksums. Installed tray navigation was exercised. Visible toast presentation and complete natural-quota-cycle evidence remain unverified; the project owner accepted those evidence limits for this version. Physical Windows reboot work is deferred to the next version at the user's direction. The [complete requirement audit](docs/acceptance-audit.md) records the scope of each check and protocol limitations; this preview does not claim full production acceptance.
+Source and packages exclude user runtime, sessions, authentication files and private threads. Portable builds still keep application data in the user's local profile.
 
-For native builds and package verification, follow [Windows build instructions](docs/build.md). User runtime, sessions and authentication files are excluded from source and packages. A portable package keeps application data in the user's local profile; it is not a copy of Codex credentials or private threads.
+</details>
 
-See [requirements](docs/requirements.md), [architecture decisions](docs/adr/001-desktop-stack.md), [security policy](SECURITY.md), and [third-party notices](THIRD_PARTY_NOTICES.md). Published packages passed the source-history security gate and installed/extracted-payload checks.
+<details>
+<summary><strong>Preview validation & accepted evidence limits</strong></summary>
+
+These results belong to packaged source checkpoint **`704b256`**, not to future commits:
+
+- The Windows Node suite passed **199/199**, with no failures or skips. Core and Windows packaging CI passed for that source.
+- The actual installed and extracted portable payloads passed strict **45-file** comparisons, checksum verification and private-path scans.
+- 598 Chinese/English catalog entries. New Diagnostics, official account activity, current Goal, tool activity and About pages were visually reviewed in both languages; installed tray navigation was exercised.
+- The complete natural quota cycle through final task completion remains unproven. Windows stored TEST notifications, but visible popup presentation was not observed. The project owner accepted both as preview evidence limits, **not as passes**.
+- Physical Windows reboot work is deferred to the next version at the user's direction.
+
+Fixtures, live Desktop checks, package verification and natural cycles are distinct evidence. This preview does not claim full production acceptance. See [validation](docs/validation.md) and the [complete requirement audit](docs/acceptance-audit.md).
+
+</details>
+
+---
+
+<div align="center">
+  <sub>Developed by <strong>xudc2</strong> and <strong>Codex</strong> · <a href="LICENSE">MIT License</a><br />An independent open-source project, not affiliated with OpenAI.</sub>
+</div>
