@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
+import { validateAccountUsageParams } from './observability/account-usage.mjs';
 
 // This client never resumes/owns a desktop thread and never starts a model turn.
-const METHODS = new Set(['account/rateLimits/read', 'thread/goal/get', 'thread/goal/set']);
+const METHODS = new Set(['account/rateLimits/read', 'account/usage/read', 'thread/goal/get', 'thread/goal/set']);
 export class AccountClient {
   constructor({ codexBin, codexHome, timeoutMs = 20000 }) {
     this.options = { codexBin, codexHome, timeoutMs };
@@ -39,6 +40,7 @@ export class AccountClient {
   }
   request(method, params) {
     if (!METHODS.has(method)) throw new Error('account-method-not-allowed');
+    if (method === 'account/usage/read') params = validateAccountUsageParams(params);
     // Status restoration is the only permitted mutation. Keep objective/budget/accounting intact.
     if (method === 'thread/goal/set' && (params?.status !== 'active' || Object.keys(params).sort().join(',') !== 'status,threadId')) throw new Error('goal-update-not-allowed');
     return this.raw(method, params);

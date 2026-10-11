@@ -33,3 +33,7 @@ Both current `f81886b` CI workflows succeeded: [Core validation/publication secu
 Visible Windows toast popup appearance and event-specific notification presentation remain open. Tray left-click/compact and the localized right-click menu/tooltip were observed across the f0cd45f and 44274f3 installed checkpoints; menu actions that change task policy were not invoked. The original natural Goal remains incomplete and physical Windows reboot is deferred to the next version.
 
 Current implementation and evidence status are recorded in [`validation.md`](validation.md) and [`acceptance-audit.md`](acceptance-audit.md). Source, packaged and installed evidence remain separate.
+
+## Follow-up source verification — 2026-10-11
+
+The source-only follow-up based on HEAD `21016bc` passes the complete Windows Node suite **185/185, 0 failures, 0 skips**, and the UI build. It adds localized diagnostics/account-activity/Goal/repository surfaces, but is not yet packaged, installed or visually accepted; the installed catalog and language evidence above remain tied to `f81886b`. The source tests cover English/Simplified Chinese rendering, safe identifiers, and privacy hiding. Root's read-only probe passed six Doctor checks; no model request, Goal mutation, or app restart was part of this source verification. Windows toast popup visibility and the original natural Goal terminal outcome remain open. Physical Windows reboot is deferred to the next version.

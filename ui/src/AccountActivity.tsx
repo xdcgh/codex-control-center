@@ -1,0 +1,17 @@
+import {useState} from 'react';
+import {t,display,dateText,numberText,errorText,useLocale} from './i18n';
+export type AccountActivitySnapshot={source:string;fetchedAt:number|null;status:string;reason?:string;summary:{lifetimeTokens:number|null;peakDailyTokens:number|null;longestRunningTurnSec:number|null;currentStreakDays:number|null;longestStreakDays:number|null};dailyBuckets:{startDate:string;tokens:number|null}[]|null;threadUsage:{status:string;reason?:string}|null};
+export function AccountActivityDetails({data}:{data:AccountActivitySnapshot}){
+ useLocale();const [allDays,setAllDays]=useState(false);
+ const daily=data.dailyBuckets?[...data.dailyBuckets].sort((a,b)=>b.startDate.localeCompare(a.startDate)):null;
+ return <><p className="caption">{t('Source')}: {data.source} · {display(data.status)} · {t('Recorded time')}: {dateText(data.fetchedAt)}</p>
+ <div className="diagnostic-grid">{Object.entries({'Official lifetime activity tokens':data.summary.lifetimeTokens,'Peak daily activity tokens':data.summary.peakDailyTokens,'Longest running turn (seconds)':data.summary.longestRunningTurnSec,'Current activity streak (days)':data.summary.currentStreakDays,'Longest activity streak (days)':data.summary.longestStreakDays}).map(([label,value])=><div key={label}><small>{display(label)}</small><strong>{numberText(value)}</strong></div>)}</div>
+ <p className="caption">{t('Per-thread official activity')}: {display(data.threadUsage?.status??'Unavailable')} · {t('No per-thread activity is inferred from account totals. Missing thread usage is unavailable, not zero.')}</p>
+ {daily?<><h3>{t('Official daily activity')}</h3><p className="caption">{t('{days} reported days',{days:numberText(daily.length)})} · {allDays?t('All reported days'):t('Latest 30 reported days')}</p>{daily.length>30&&<button onClick={()=>setAllDays(!allDays)}>{allDays?t('Show latest 30 days'):t('Show all reported days')}</button>}<div className="table-scroll" style={{maxHeight:360}}><table><thead><tr><th>{t('Reported date')}</th><th>{t('Official activity tokens')}</th></tr></thead><tbody>{(allDays?daily:daily.slice(0,30)).map(row=><tr key={row.startDate}><td>{row.startDate}</td><td>{numberText(row.tokens)}</td></tr>)}</tbody></table></div></>:<p className="caption">{t('Official daily activity is unavailable')}</p>}
+ </>;
+}
+export default function AccountActivity({request}:{request:(method:string)=>Promise<unknown>}){
+ const[data,setData]=useState<AccountActivitySnapshot|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');useLocale();
+ const read=async()=>{setBusy(true);try{setData(await request('account/activity/read') as AccountActivitySnapshot);setError('');}catch(e){setError(String(e));}finally{setBusy(false)}};
+ return <section className="panel"><div className="panel-heading"><div><h2>{t('Official account activity')}</h2><p className="caption">{t('A separate official account scope. Never add it to local response, counter-delta or sample ledgers; it is not a subscription quota conversion or bill.')}</p><p className="caption">{t('Read on demand. Reads within 60 seconds reuse the same recorded snapshot time.')}</p></div><button disabled={busy} onClick={()=>void read()}>{busy?t('Working'):data?t('Refresh official activity'):t('Read official account activity')}</button></div>{error&&<p className="error">{errorText(error)}</p>}{data?<AccountActivityDetails data={data}/>:<p className="caption">{t('Official account activity has not been requested')}</p>}</section>;
+}

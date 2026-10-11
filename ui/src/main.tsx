@@ -12,7 +12,8 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import "./style.css";
 import { quotaMetrics } from './quota-metrics.mjs';
 import PricingSettings from './PricingSettings';
-import ThreadDetails from './ThreadDetails';
+import ThreadDetails, {type CurrentGoal} from './ThreadDetails';
+import AccountActivity from './AccountActivity';
 
 type WindowQuota = {
   durationMinutes: number;
@@ -46,6 +47,7 @@ type Task = {
   failedAt?: number;
   lastTurnId?: string;
   policy: Policy;
+  currentGoal?:CurrentGoal;
   repository?:string|null;currentTurnId?:string|null;currentTurnStatus?:string|null;turnStartedAt?:number|null;turnEndedAt?:number|null;modelContextWindow?:number|null;collaborationMode?:string|null;runtimeType?:string|null;runtimeFlags?:string[];metadataSource?:string;nextRecoveryCheckAt?:number;quotaAttribution?:{status:string;reason:string};
 };
 type Snapshot = {
@@ -1208,9 +1210,6 @@ function Diagnostics({
             CLI: s?.compatibility.cliVersion ?? t("Unavailable"),
             Desktop: s?.compatibility.desktopVersion ?? t("Unavailable"),
             Compatibility: display(s?.compatibility.status ?? t("Unavailable")),
-            Adapter: t("Official app-server + verified Desktop IPC"),
-            QuotaSource: t("Official account/rateLimits/read"),
-            Database: t("Local SQLite · WAL"),
             LastQuotaPoll: date(s?.lastQuotaPollAt),
             RecoveryMode: display(s?.mode ?? t("Unavailable")),
           }).map(([key, value]) => (
@@ -1288,6 +1287,7 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
       <div className="banner">
         {t("Estimated API-equivalent cost uses public API pricing. It is not the amount charged by the Codex subscription.")}
       </div>
+      <AccountActivity request={request}/>
       <StatisticsComparison groups={data?.groups??[]} privacy={privacy} groupBy={groupBy}/>
       <section className="panel">
         <div className="panel-heading">
@@ -1302,6 +1302,7 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
               "thread",
               "goal",
               "workspace",
+              "repository",
               "hour",
               "day",
               "5h",
@@ -1334,11 +1335,11 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
                   <tr key={i}>
                     <td>
                       {privacy &&
-                      ["workspace", "thread", "goal"].includes(groupBy)
+                      ["workspace", "repository", "thread", "goal"].includes(groupBy)
                         ? t("Private group")
                         : typeof g.key === "object"
                           ? JSON.stringify(g.key)
-                          : baselineGroup(g)?localizeOwnedValue("inventory",String(g.key),locale()):groupBy==="collaboration"?localizeOwnedValue("collaboration",String(g.key),locale()):String(g.key)}
+                          : groupBy==="repository"&&g.key==="Unavailable"?t("Unavailable"):baselineGroup(g)?localizeOwnedValue("inventory",String(g.key),locale()):groupBy==="collaboration"?localizeOwnedValue("collaboration",String(g.key),locale()):String(g.key)}
                       <small>{g.ledger}</small>
                     </td>
                     {[

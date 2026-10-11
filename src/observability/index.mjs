@@ -1,6 +1,6 @@
 import { SessionLogAdapter, tokenFields } from './session-log-adapter.mjs';
 import { PricingPolicy, normalizeServiceTier, digest } from './pricing.mjs';
-import { observedGoalRelation } from './metadata.mjs';
+import { observedGoalRelation, safeRepository } from './metadata.mjs';
 export { GOAL_RELATION_REASONS } from './metadata.mjs';
 export { SessionLogAdapter } from './session-log-adapter.mjs';
 export { PricingPolicy, validatePricing, normalizeServiceTier } from './pricing.mjs';
@@ -21,18 +21,18 @@ export class ObservabilityService {
     this.store=store;this.now=now;this.adapter=new SessionLogAdapter({store,codexHome,now});this.pricing=new PricingPolicy({store,policy});
   }
   poll() { return this.adapter.poll(); }
-  observeTurnMetadata({threadId,turnId,model,provider,rawServiceTier,effort,collaborationMode,kind,goalId,goalRelationReason,goalAttributionReason,modelContextWindow,turnStartedAtMs,turnCompletedAtMs,observedAt=this.now(),source}={}) {
+  observeTurnMetadata({threadId,turnId,repository,model,provider,rawServiceTier,effort,collaborationMode,kind,goalId,goalRelationReason,goalAttributionReason,modelContextWindow,turnStartedAtMs,turnCompletedAtMs,observedAt=this.now(),source}={}) {
     if(!['desktop-ipc','official-app-server'].includes(source)||typeof threadId!=='string'||typeof turnId!=='string'||!Number.isSafeInteger(observedAt)) throw new Error('invalid-observed-turn-metadata');
     const safe=v=>typeof v==='string'&&/^[a-zA-Z0-9._-]{1,128}$/.test(v)?v:null;
     const number=v=>Number.isSafeInteger(v)&&v>=0?v:null;
-    const metadata={model:safe(model),provider:safe(provider),rawServiceTier:safe(rawServiceTier),effort:safe(effort),collaborationMode:safe(collaborationMode),...observedGoalRelation({kind,goalId,goalRelationReason,goalAttributionReason}),modelContextWindow:number(modelContextWindow)>0?number(modelContextWindow):null,turnStartedAtMs:number(turnStartedAtMs),turnCompletedAtMs:number(turnCompletedAtMs),source};
+    const metadata={repository:safeRepository(repository),model:safe(model),provider:safe(provider),rawServiceTier:safe(rawServiceTier),effort:safe(effort),collaborationMode:safe(collaborationMode),...observedGoalRelation({kind,goalId,goalRelationReason,goalAttributionReason}),modelContextWindow:number(modelContextWindow)>0?number(modelContextWindow):null,turnStartedAtMs:number(turnStartedAtMs),turnCompletedAtMs:number(turnCompletedAtMs),source};
     const key='observability:turn-metadata:'+digest([threadId,turnId]),history=this.store.getSetting(key,[]);
     if(JSON.stringify(history.at(-1)?.metadata)!==JSON.stringify(metadata)) { history.push({observedAt,metadata});history.sort((a,b)=>a.observedAt-b.observedAt);this.store.setSetting(key,history); }
     return {recorded:true,source,scope:'exact-turn; only subsequent events are enriched'};
   }
   rows(table) { return this.store.db.prepare(`SELECT metadata_json FROM ${table}`).all().map(r=>JSON.parse(r.metadata_json)); }
   summary({since=0,groupBy='model'}={}) {
-    const keys={model:'model',tier:'serviceTier',effort:'effort',collaboration:'collaborationMode',kind:'kind',turn:'turnId',thread:'threadId',goal:'goalId',workspace:'workspace'};
+    const keys={model:'model',tier:'serviceTier',effort:'effort',collaboration:'collaborationMode',kind:'kind',turn:'turnId',thread:'threadId',goal:'goalId',workspace:'workspace',repository:'repository'};
     if(!keys[groupBy] && !windows[groupBy]) throw new Error('unsupported-group-by');
     const groups=new Map();
     const all=this.rows('token_usage').filter(e=>e.timestamp>=since);
@@ -46,7 +46,7 @@ export class ObservabilityService {
       }
       const inventory=e.initialCounter||e.discontinuity||e.outOfOrder||e.scope==='counter-snapshot';
       const unproven=inventory&&groupBy!=='thread';
-      const key=unproven?'Counter inventory (unknown attribution)':windows[groupBy]?String(Math.floor(e.timestamp/windows[groupBy])*windows[groupBy]):groupBy==='tier'?normalizeServiceTier(e.rawServiceTier??e.serviceTier,e.provider)??'Unknown':e[keys[groupBy]]??'Unknown';
+      const key=unproven?'Counter inventory (unknown attribution)':windows[groupBy]?String(Math.floor(e.timestamp/windows[groupBy])*windows[groupBy]):groupBy==='tier'?normalizeServiceTier(e.rawServiceTier??e.serviceTier,e.provider)??'Unknown':e[keys[groupBy]]??(groupBy==='repository'?'Unavailable':'Unknown');
       const ledger=inventory?'baseline-counter-inventory':e.scope==='response'?'response':e.scope==='latest-sample'?'latest-sample':'cumulative-delta';
       const mapKey=JSON.stringify([key,ledger]);
       if(!groups.has(mapKey)) groups.set(mapKey,{key,ledger,samples:0,tokens:Object.fromEntries(tokenFields.map(k=>[k,0])),missing:Object.fromEntries(tokenFields.map(k=>[k,0])),inventoryValues:Object.fromEntries(tokenFields.map(k=>[k,[]])),estimatedUsd:0,pricedSamples:0,partialPriceSamples:0,pricingReasons:{},actualRequestInputs:[],latestSampleInputs:[],longContextSamples:0,unknownContextSamples:0,discontinuities:0});
@@ -132,9 +132,17 @@ export class ObservabilityService {
     return {confidence:'low',label:'Empirical co-occurrence; no official quota-token conversion or thread attribution',buckets:rows,correlations};
   }
   pricingSnapshots() { return this.pricing.snapshots(); }
-  diagnostics() { return {adapter:'SessionLogAdapter/v1',source:'local sessions/archived_sessions',lastPoll:this.store.getSetting('observability:last-poll'),usageRecords:this.store.db.prepare('SELECT count(*) AS n FROM token_usage').get().n,performanceRecords:this.store.db.prepare('SELECT count(*) AS n FROM performance_samples').get().n,pricingSnapshotIds:this.pricingSnapshots().map(p=>p.id),privacy:'No prompts, messages, tool arguments, auth or complete sessions stored',databaseSchema:this.store.schemaVersion??this.store.db.prepare('PRAGMA user_version').get().user_version}; }
+  diagnostics() {
+    const usage=this.rows('token_usage'), snapshots=this.pricingSnapshots();
+    const ledgerOf=e=>e.initialCounter||e.discontinuity||e.outOfOrder||e.scope==='counter-snapshot'?'baseline-counter-inventory':e.scope==='response'?'response':e.scope==='latest-sample'?'latest-sample':'cumulative-delta';
+    const coverage=['response','cumulative-delta','latest-sample','baseline-counter-inventory'].map(ledger=>{const rows=usage.filter(e=>ledgerOf(e)===ledger);return {ledger,records:rows.length,missingTotalTokens:rows.filter(e=>e.usage?.total_tokens==null).length,missingModel:rows.filter(e=>!e.model).length};});
+    const retrieved=snapshots.map(p=>Date.parse(p.retrievedAt)).filter(Number.isFinite);
+    return {adapter:'SessionLogAdapter/v1',source:'local sessions/archived_sessions',lastPoll:this.store.getSetting('observability:last-poll'),usageRecords:usage.length,performanceRecords:this.store.db.prepare('SELECT count(*) AS n FROM performance_samples').get().n,pricingSnapshotIds:snapshots.map(p=>p.id),pricingSnapshotCount:snapshots.length,latestPricingRetrievedAt:retrieved.length?Math.max(...retrieved):null,coverage,privacy:'No prompts, messages, tool arguments, auth or complete sessions stored',databaseSchema:this.store.schemaVersion??this.store.db.prepare('PRAGMA user_version').get().user_version};
+  }
   exportDiagnostics() {
     const d=this.diagnostics();
-    return {schemaVersion:1,adapter:d.adapter,source:d.source,lastPoll:d.lastPoll,usageRecords:d.usageRecords,performanceRecords:d.performanceRecords,pricingSnapshotCount:d.pricingSnapshotIds.length,databaseSchema:d.databaseSchema,privacy:d.privacy};
+    const safeCount=value=>Number.isSafeInteger(value)&&value>=0?value:null;
+    const lastPoll=d.lastPoll?Object.fromEntries(['timestamp','files','records','usage','errors','discontinuities'].map(key=>[key,safeCount(d.lastPoll[key])])):null;
+    return {schemaVersion:1,adapter:d.adapter,source:d.source,lastPoll,usageRecords:d.usageRecords,performanceRecords:d.performanceRecords,pricingSnapshotCount:d.pricingSnapshotIds.length,latestPricingRetrievedAt:d.latestPricingRetrievedAt,coverage:d.coverage,databaseSchema:d.databaseSchema,privacy:d.privacy};
   }
 }

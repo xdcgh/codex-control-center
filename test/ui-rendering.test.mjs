@@ -28,9 +28,15 @@ async function loadComponent() {
   fs.writeFileSync(path.join(dir, 'i18n.mjs'), i18n);
   fs.writeFileSync(path.join(dir, 'comparison.mjs'), component);
   fs.writeFileSync(path.join(dir, 'thread.mjs'), thread);
+  const runtime = withExplicitExtension(await compile('ui/src/RuntimeDiagnostics.tsx', 'RuntimeDiagnostics.tsx'), 'i18n');
+  fs.writeFileSync(path.join(dir, 'runtime.mjs'), runtime);
+  const account = withExplicitExtension(await compile('ui/src/AccountActivity.tsx', 'AccountActivity.tsx'), 'i18n');
+  fs.writeFileSync(path.join(dir, 'account.mjs'), account);
   return {
     module: await import(pathToFileURL(path.join(dir, 'comparison.mjs'))),
     thread: await import(pathToFileURL(path.join(dir, 'thread.mjs'))),
+    runtime: await import(pathToFileURL(path.join(dir, 'runtime.mjs'))),
+    account: await import(pathToFileURL(path.join(dir, 'account.mjs'))),
     i18n: await import(pathToFileURL(path.join(dir, 'i18n.mjs'))),
     close: () => fs.rmSync(dir, { recursive: true, force: true }),
   };
@@ -145,3 +151,10 @@ test('inventory and count placeholders localize by field without translating rea
   assert.ok(chinese.includes('<td>Counter inventory (unknown attribution)<small>response'));
  }finally{fixture.close();}
 });
+
+test('diagnostic inventory and Goal counters render distinct evidence in both languages; repository privacy hides keys',async()=>{
+ const f=await loadComponent();try{const diagnostic={rows:[{label:'Model catalog',source:'Official model/list',observedAt:null,ageMs:null,freshness:'Unavailable',coverage:'Unavailable',reason:'Catalog listing does not establish model entitlement'},{label:'Last quota poll',source:'Official account/rateLimits/read',observedAt:1800000000000,ageMs:60000,freshness:'Stale',coverage:'Observed',reason:'Reported windows only; missing windows remain unavailable'}],coverage:[{ledger:'baseline-counter-inventory',records:1,missingTotalTokens:1,missingModel:1}],limits:['Global and fork consumption are unverified']};for(const language of ['en','zh-CN']){f.i18n.setLocalePreferences({language});const html=renderToStaticMarkup(React.createElement(f.runtime.DiagnosticsInventory,{data:diagnostic}));assert.match(html,language==='en'?/No recorded observation time/:/没有已记录的观测时间/);assert.match(html,language==='en'?/Stale/:/观测已过期/);assert.match(html,language==='en'?/Baseline counter inventory/:/基线计数器清单/);const goalProps={presence:'present',status:'budgetLimited',tokenBudget:null,tokenBudgetState:'not-provided',tokensUsed:321,timeUsedSeconds:42,observedAt:1800000000000,source:'verified-desktop-ipc'};const budget=renderToStaticMarkup(React.createElement(f.thread.GoalDetails,{goal:goalProps}));const quota=renderToStaticMarkup(React.createElement(f.thread.GoalDetails,{goal:{...goalProps,status:'usageLimited'}}));assert.match(budget,language==='en'?/Goal budget limited/:/Goal 预算已用尽/);assert.match(quota,language==='en'?/Goal usage limited/:/Goal 受额度限制/);assert.match(budget,/321/);assert.match(budget,language==='en'?/Token budget not provided/:/未提供 Token 预算/);const privateRepo=renderToStaticMarkup(React.createElement(f.module.StatisticsComparison,{privacy:true,groupBy:'repository',groups:[{key:'PRIVATE_REPO_PATH',ledger:'response'}]}));assert.doesNotMatch(privateRepo,/PRIVATE_REPO_PATH/);const shownRepo=renderToStaticMarkup(React.createElement(f.module.StatisticsComparison,{privacy:false,groupBy:'repository',groups:[{key:'PRIVATE_REPO_PATH',ledger:'response'}]}));assert.match(shownRepo,/PRIVATE_REPO_PATH/);}}finally{f.close();}
+});
+
+test('diagnostics retry clears a transient error and preserves last evidence on a later failure',async()=>{const f=await loadComponent();try{let state={data:null,error:''},fail=true;const evidence={rows:[],coverage:null,limits:[]};const request=async()=>{if(fail)throw Error('temporary unavailable');return evidence};const commit=update=>state={...state,...update};await f.runtime.loadDiagnosticsInventory(request,commit);assert.match(state.error,/temporary unavailable/);assert.equal(state.data,null);fail=false;await f.runtime.loadDiagnosticsInventory(request,commit);assert.equal(state.error,'');assert.deepEqual(state.data,evidence);fail=true;await f.runtime.loadDiagnosticsInventory(request,commit);assert.deepEqual(state.data,evidence);assert.notEqual(state.error,'');}finally{f.close()}});
+test('official account activity renders an independent scope and nullable thread usage in both languages',async()=>{const f=await loadComponent();try{const data={source:'official-app-server:account/usage/read',status:'Partial',fetchedAt:1800000000000,summary:{lifetimeTokens:1234,peakDailyTokens:null,longestRunningTurnSec:42,currentStreakDays:2,longestStreakDays:3},dailyBuckets:[{startDate:'2027-01-15',tokens:123}],threadUsage:{status:'Unavailable'}};for(const language of ['en','zh-CN']){f.i18n.setLocalePreferences({language});const html=renderToStaticMarkup(React.createElement(f.account.AccountActivityDetails,{data}));assert.match(html,/1,234/);assert.match(html,language==='en'?/Peak daily activity tokens/:/单日活动 Token 峰值/);assert.match(html,language==='en'?/Missing thread usage is unavailable, not zero/:/线程用量缺失表示不可用，不代表零/);assert.match(html,language==='en'?/Unavailable/:/不可用/);assert.match(html,/2027-01-15/);assert.doesNotMatch(html,/cumulative-delta: 1234/);}}finally{f.close()}});

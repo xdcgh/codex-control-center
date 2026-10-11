@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { AccountClient } from '../rpc.mjs';
+import { normalizeAccountUsage, unavailableAccountUsage, validateAccountUsageParams } from '../observability/account-usage.mjs';
 import { DesktopClient } from '../ipc.mjs';
 import { inspectBundle, SUPPORTED } from '../bundle.mjs';
 import { listRootThreads, isRootThreadEligible } from '../catalog.mjs';
@@ -16,11 +17,19 @@ export class OfficialAppServerAdapter {
     await this.ready;
   }
   request(method, params) {
-    if (['account/rateLimits/read','thread/goal/get','thread/goal/set'].includes(method)) return this.client.request(method, params);
+    if (['account/rateLimits/read','account/usage/read','thread/goal/get','thread/goal/set'].includes(method)) return this.client.request(method, params);
     if (!['model/list','thread/read'].includes(method)) throw new Error('official-method-not-allowed');
     return this.client.raw(method, params);
   }
   readQuota() { return this.request('account/rateLimits/read'); }
+  async readAccountUsage(params = {}) {
+    const query = validateAccountUsageParams(params);
+    try { return normalizeAccountUsage(await this.request('account/usage/read', query), { params: query, fetchedAt: Date.now() }); }
+    catch (error) {
+      const reason = error?.message === 'account-query-timeout' ? 'account-usage-timeout' : error?.message === 'account-rpc--32601' ? 'account-usage-method-unavailable' : 'account-usage-request-failed';
+      return unavailableAccountUsage(reason, { params: query, fetchedAt: Date.now() });
+    }
+  }
   getGoal(id) { return this.request('thread/goal/get', { threadId: id }); }
   readThread(id, { includeTurns = false } = {}) { return this.request('thread/read', { threadId: id, includeTurns }); }
   async listModels() {
@@ -101,6 +110,7 @@ export class CodexAdapter {
   async connect() { await this.official.connect(); }
   probeCompatibility() { return this.compatibility = this.probe.inspect(); }
   readQuota() { return this.official.readQuota(); }
+  readAccountUsage(params = {}) { return this.official.readAccountUsage(params); }
   listThreads(now) { return listRootThreads(this.config.codexHome, now); }
   isEligible(id) { return isRootThreadEligible(this.config.codexHome, id); }
   async snapshot(id) {

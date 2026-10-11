@@ -14,3 +14,8 @@ export function observedGoalRelation({kind,goalId,goalRelationReason,goalAttribu
   if(reason==='explicit-no-current-goal'&&kind==='ordinary'&&!id)return {kind:'ordinary',goalId:null,goalRelationReason:reason,goalRelationQuality:'Not a Goal'};
   return {kind:null,goalId:null,goalRelationReason:reason==='canonical-turn-starts-within-current-active-goal'?'goal-identity-unavailable':reason,goalRelationQuality:'Unavailable'};
 }
+export function safeRepository(value) {
+  if(typeof value!=='string'||!value||value.length>4096||/[\u0000-\u001f]/.test(value))return null;
+  try { const url=new URL(value);if(['http:','https:','ssh:','git:'].includes(url.protocol)){url.username='';url.password='';url.search='';url.hash='';return url.toString();} } catch { /* SCP syntax and local paths remain private, local metadata. */ }
+  return value;
+}
