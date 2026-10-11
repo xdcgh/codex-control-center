@@ -158,3 +158,25 @@ test('diagnostic inventory and Goal counters render distinct evidence in both la
 
 test('diagnostics retry clears a transient error and preserves last evidence on a later failure',async()=>{const f=await loadComponent();try{let state={data:null,error:''},fail=true;const evidence={rows:[],coverage:null,limits:[]};const request=async()=>{if(fail)throw Error('temporary unavailable');return evidence};const commit=update=>state={...state,...update};await f.runtime.loadDiagnosticsInventory(request,commit);assert.match(state.error,/temporary unavailable/);assert.equal(state.data,null);fail=false;await f.runtime.loadDiagnosticsInventory(request,commit);assert.equal(state.error,'');assert.deepEqual(state.data,evidence);fail=true;await f.runtime.loadDiagnosticsInventory(request,commit);assert.deepEqual(state.data,evidence);assert.notEqual(state.error,'');}finally{f.close()}});
 test('official account activity renders an independent scope and nullable thread usage in both languages',async()=>{const f=await loadComponent();try{const data={source:'official-app-server:account/usage/read',status:'Partial',fetchedAt:1800000000000,summary:{lifetimeTokens:1234,peakDailyTokens:null,longestRunningTurnSec:42,currentStreakDays:2,longestStreakDays:3},dailyBuckets:[{startDate:'2027-01-15',tokens:123}],threadUsage:{status:'Unavailable'}};for(const language of ['en','zh-CN']){f.i18n.setLocalePreferences({language});const html=renderToStaticMarkup(React.createElement(f.account.AccountActivityDetails,{data}));assert.match(html,/1,234/);assert.match(html,language==='en'?/Peak daily activity tokens/:/单日活动 Token 峰值/);assert.match(html,language==='en'?/Missing thread usage is unavailable, not zero/:/线程用量缺失表示不可用，不代表零/);assert.match(html,language==='en'?/Unavailable/:/不可用/);assert.match(html,/2027-01-15/);assert.doesNotMatch(html,/cumulative-delta: 1234/);}}finally{f.close()}});
+
+test('tool activity UI separates pending requests, observed execution and non-actionable inactivity in both languages',async()=>{
+ const fixture=await loadComponent();try{
+  const activity={source:'local-session-log',status:'ObservedPendingRequest',lastEventAt:1790000001000,pendingRequests:2,executingTools:0,indexedAt:1790000002000,heuristic:{status:'HeuristicSuspectedInactivity',automaticAction:false}};
+  fixture.i18n.setLocalePreferences({language:'en'});
+  const english=renderToStaticMarkup(React.createElement(fixture.thread.ActivityDetails,{activity}));
+  assert.match(english,/Observed pending tool request/);assert.match(english,/Last event activity/);assert.match(english,/Authoritative current tool state/);assert.match(english,/Suspected inactivity \(heuristic\)/);assert.match(english,/never triggers recovery/);
+  fixture.i18n.setLocalePreferences({language:'zh-CN'});
+  const chinese=renderToStaticMarkup(React.createElement(fixture.thread.ActivityDetails,{activity}));
+  assert.match(chinese,/观测到待返回的工具请求/);assert.match(chinese,/最近事件活动/);assert.match(chinese,/疑似无活动（启发式）/);assert.match(chinese,/此提示不会触发恢复/);assert.match(chinese,/local-session-log/);
+  const execution=renderToStaticMarkup(React.createElement(fixture.thread.ActivityStatus,{activity:{...activity,status:'ObservedExecuting'}}));assert.match(execution,/观测到工具执行/);
+  const missing=renderToStaticMarkup(React.createElement(fixture.thread.ActivityDetails,{}));assert.match(missing,/不可用/);assert.doesNotMatch(missing,/疑似无活动（启发式）/);assert.doesNotMatch(missing,/<strong>0<\/strong>/);
+ }finally{fixture.close();}
+});
+
+test('known activity missing-source reasons localize without translating unknown diagnostic identifiers',async()=>{
+ const fixture=await loadComponent();try{
+ fixture.i18n.setLocalePreferences({language:'zh-CN'});
+ const known=renderToStaticMarkup(React.createElement(fixture.thread.ActivityDetails,{activity:{status:'Unavailable',reason:'event-source-stale-or-detached'}}));assert.match(known,/事件来源已过期或已脱离观测/);assert.doesNotMatch(known,/疑似无活动（启发式）/);
+ const unknown=renderToStaticMarkup(React.createElement(fixture.thread.ActivityDetails,{activity:{status:'Unavailable',reason:'vendor-new-diagnostic-code'}}));assert.match(unknown,/vendor-new-diagnostic-code/);
+ }finally{fixture.close();}
+});

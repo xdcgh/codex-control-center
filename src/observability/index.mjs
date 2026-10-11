@@ -1,6 +1,7 @@
 import { SessionLogAdapter, tokenFields } from './session-log-adapter.mjs';
 import { PricingPolicy, normalizeServiceTier, digest } from './pricing.mjs';
 import { observedGoalRelation, safeRepository } from './metadata.mjs';
+import { projectActivity } from './activity.mjs';
 export { GOAL_RELATION_REASONS } from './metadata.mjs';
 export { SessionLogAdapter } from './session-log-adapter.mjs';
 export { PricingPolicy, validatePricing, normalizeServiceTier } from './pricing.mjs';
@@ -21,6 +22,11 @@ export class ObservabilityService {
     this.store=store;this.now=now;this.adapter=new SessionLogAdapter({store,codexHome,now});this.pricing=new PricingPolicy({store,policy});
   }
   poll() { return this.adapter.poll(); }
+  currentActivity(canonical={}) {
+    const sources=typeof canonical.threadId==='string'?this.store.getSetting('observability:activity-sources:'+digest(canonical.threadId),[]):[];
+    const poll=this.store.getSetting('observability:last-poll',{});
+    return projectActivity(sources,canonical,{now:this.now(),indexedAt:poll.timestamp,indexErrors:poll.errors});
+  }
   observeTurnMetadata({threadId,turnId,repository,model,provider,rawServiceTier,effort,collaborationMode,kind,goalId,goalRelationReason,goalAttributionReason,modelContextWindow,turnStartedAtMs,turnCompletedAtMs,observedAt=this.now(),source}={}) {
     if(!['desktop-ipc','official-app-server'].includes(source)||typeof threadId!=='string'||typeof turnId!=='string'||!Number.isSafeInteger(observedAt)) throw new Error('invalid-observed-turn-metadata');
     const safe=v=>typeof v==='string'&&/^[a-zA-Z0-9._-]{1,128}$/.test(v)?v:null;

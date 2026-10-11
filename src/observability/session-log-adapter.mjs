@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { digest, normalizeServiceTier } from './pricing.mjs';
 import { observedGoalRelation, safeGoalId } from './metadata.mjs';
+import { activityState, reduceActivity } from './activity.mjs';
+import { isUuid } from '../policy.mjs';
 
 export const tokenFields = ['input_tokens','cached_input_tokens','cache_write_input_tokens','output_tokens','reasoning_output_tokens','total_tokens'];
 export const tokens = value => Object.fromEntries(tokenFields.map(k => [k, Number.isSafeInteger(value?.[k]) && value[k] >= 0 ? value[k] : null]));
@@ -33,30 +35,46 @@ export class SessionLogAdapter {
   read(file,result) {
     const key='observability:cursor:'+digest(file), stat=fs.statSync(file);
     let cursor=this.store.getSetting(key,{offset:0,meta:{},anchor:null});
+    const oldThreadId=cursor.meta.threadId;
+    cursor.activityEpoch??=1;
     const fd=fs.openSync(file,'r');
     try {
       if (cursor.offset) {
         const size=Math.min(cursor.offset,128), b=Buffer.alloc(size); fs.readSync(fd,b,0,size,cursor.offset-size);
-        if (stat.size<cursor.offset || digest(b.toString('hex'))!==cursor.anchor) { cursor={offset:0,meta:{},anchor:null}; result.discontinuities++; }
+        if (stat.size<cursor.offset || digest(b.toString('hex'))!==cursor.anchor) { cursor={offset:0,meta:{},anchor:null,activityEpoch:cursor.activityEpoch+1};this.publishActivity(file,{...cursor,meta:{threadId:oldThreadId}},false); result.discontinuities++; }
       }
       const buffer=Buffer.alloc(Math.min(this.maxReadBytes,Math.max(0,stat.size-cursor.offset)));
       fs.readSync(fd,buffer,0,buffer.length,cursor.offset);
       const end=buffer.lastIndexOf(10);
-      if (end<0) { if(buffer.length===this.maxReadBytes) result.errors++; return; }
+      if (end<0) { if(buffer.length===this.maxReadBytes) result.errors++;this.publishActivity(file,cursor,cursor.offset===stat.size); return; }
       const lines=buffer.subarray(0,end+1).toString('utf8').split('\n');
+      const context={epoch:cursor.activityEpoch,state:cursor.activity??null,legacyGap:cursor.offset>0&&!cursor.activity};
       this.store.transaction(()=>{
         for (const line of lines) {
           if (!line.trim()) continue;
-          try { const event=JSON.parse(line); result.records++; this.consume(event,cursor.meta,result); } catch { result.errors++; }
+          try { const event=JSON.parse(line); result.records++; this.consume(event,cursor.meta,result,context); } catch { result.errors++;if(context.state)context.state.gap=true; }
         }
         cursor.offset+=end+1;
         const size=Math.min(cursor.offset,128), b=Buffer.alloc(size); fs.readSync(fd,b,0,size,cursor.offset-size); cursor.anchor=digest(b.toString('hex'));
-        this.store.setSetting(key,cursor);
+        cursor.activity=context.state;this.store.setSetting(key,cursor);this.publishActivity(file,cursor,cursor.offset===stat.size);
       }); result.files++;
     } finally { fs.closeSync(fd); }
   }
-  consume(event,meta,result) {
+  publishActivity(file,cursor,complete) {
+    if(!isUuid(cursor.meta.threadId))return;
+    const key='observability:activity-sources:'+digest(cursor.meta.threadId),sourceKey=digest(file);
+    const sources=this.store.getSetting(key,[]).filter(entry=>entry.sourceKey!==sourceKey);
+    sources.push({sourceKey,state:cursor.activity??null,complete,indexedAt:this.now()});
+    this.store.setSetting(key,sources.sort((a,b)=>b.indexedAt-a.indexedAt).slice(0,8));
+  }
+  consume(event,meta,result,context) {
     const p=event.payload ?? {}, timestamp=Date.parse(event.timestamp);
+    if(context){
+      const threadId=event.type==='session_meta'?scalar(p.id):meta.threadId;
+      const turnId=scalar(p.turn_id)??meta.turnId;
+      if(event.type==='turn_context'&&isUuid(threadId)&&isUuid(turnId)&&context.state?.turnId!==turnId)context.state=activityState(threadId,turnId,context.epoch,true);
+      context.state=reduceActivity(context.state,event,{threadId,turnId,epoch:context.epoch,now:this.now(),legacyGap:context.legacyGap});
+    }
     if (event.type==='session_meta') { meta.threadId=scalar(p.id); meta.workspace=scalar(p.cwd); meta.provider=scalar(p.model_provider);meta.parentThreadId=scalar(p.parent_thread_id);meta.forkedHistory=!!(p.forked_from_id??p.forked_from);meta.modelContextWindow=Number.isSafeInteger(p.context_window)&&p.context_window>0?p.context_window:null; return; }
     if (event.type==='turn_context') {
       meta.turnId=scalar(p.turn_id); meta.model=scalar(p.model); meta.effort=scalar(p.effort ?? p.reasoning_effort); meta.serviceTier=scalar(p.service_tier); meta.provider=scalar(p.model_provider) ?? meta.provider; meta.workspace=scalar(p.cwd) ?? meta.workspace; meta.goalId=safeGoalId(p.goal_id);meta.collaborationMode=scalar(p.collaboration_mode?.mode);meta.rootTurnId=scalar(p.root_turn_id);

@@ -574,7 +574,35 @@ export const catalog = {
   "Not loaded": "未加载",
   "System error": "系统错误",
   "Counter inventory (unknown attribution)": "计数存量（归因未知）",
-  "Unknown (initial thread counter)": "未知（初始任务计数）"
+  "Unknown (initial thread counter)": "未知（初始任务计数）",
+  "Observed tool activity": "观测工具活动",
+  "Observed pending tool request": "观测到待返回的工具请求",
+  "Observed tool execution": "观测到工具执行",
+  "No observed pending tool": "未观测到待返回工具",
+  "Stale tool observation": "工具观测已过期",
+  "Last event activity": "最近事件活动",
+  "Pending tool requests": "待返回工具请求",
+  "Executing tools (explicit begin events)": "执行中的工具（明确开始事件）",
+  "Authoritative current tool state": "权威的当前工具状态",
+  "Requests awaiting output do not prove tool execution. Only explicit begin/end events support observed execution. No tool names or contents are retained.": "等待输出的请求不能证明工具正在执行。只有明确开始 / 结束事件支持执行观测。不保留工具名称或内容。",
+  "Suspected inactivity (heuristic)": "疑似无活动（启发式）",
+  "No inactivity warning": "暂无无活动提示",
+  "Inactivity heuristic": "无活动启发式提示",
+  "No new observed events for 15 minutes while a fresh canonical turn remains active. Long-running tools or quiet output may be normal. This hint never triggers recovery or changes task or Goal state.": "最新标准轮次仍活跃，但 15 分钟未观测到新事件。长时间工具或静默输出可能正常。此提示不会触发恢复，也不会更改任务或 Goal 状态。",
+  "Event activity is independent of Last observed, which records the Desktop poll time. Stale, incomplete or mismatched event coverage remains unavailable.": "事件活动独立于“最近观测”，后者记录 Desktop 轮询时间。事件覆盖已过期、不完整或无法匹配时保持不可用。",
+  "Event index checked": "事件索引检查时间",
+  "Exact canonical turn is unavailable": "精确的标准轮次不可用",
+  "Canonical observation is stale": "标准轮次观测已过期",
+  "Canonical turn is not active": "标准轮次不处于活动状态",
+  "No events match the current turn": "没有匹配当前轮次的事件",
+  "Event index is stale or incomplete": "事件索引已过期或不完整",
+  "Event source is stale or detached": "事件来源已过期或已脱离观测",
+  "Current-turn event coverage is incomplete": "当前轮次事件覆盖不完整",
+  "Event clock or turn boundary is invalid": "事件时钟或轮次边界无效",
+  "A terminal turn event was observed": "已观测到轮次结束事件",
+  "Open tool observation is stale": "未结束工具的观测已过期",
+  "Activity observation is unavailable": "活动观测不可用",
+  "Activity observation is stale": "活动观测已过期"
 } as const;
 export type MessageKey = keyof typeof catalog;
 export type Locale = 'zh-CN' | 'en';
@@ -595,6 +623,20 @@ export function formatDate(value:number|string|Date|null|undefined,resolved:Loca
 
 /** Field-scoped labels are verified product enums; unknown values remain exact. */
 export const ownedLabels = {
+  "activity": {
+  "exact-turn-unavailable": "Exact canonical turn is unavailable",
+  "canonical-observation-stale": "Canonical observation is stale",
+  "canonical-turn-not-active": "Canonical turn is not active",
+  "no-exact-turn-events": "No events match the current turn",
+  "event-index-stale-or-incomplete": "Event index is stale or incomplete",
+  "event-source-stale-or-detached": "Event source is stale or detached",
+  "event-coverage-incomplete": "Current-turn event coverage is incomplete",
+  "event-clock-or-turn-boundary-invalid": "Event clock or turn boundary is invalid",
+  "observed-turn-terminal": "A terminal turn event was observed",
+  "open-tool-observation-stale": "Open tool observation is stale",
+  "activity-observation-unavailable": "Activity observation is unavailable",
+  "activity-observation-stale": "Activity observation is stale"
+},
   "taskReason": {
     "running": "Working",
     "completed": "Completed",

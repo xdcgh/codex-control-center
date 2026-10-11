@@ -2,6 +2,9 @@ import { createHmac,randomBytes } from 'node:crypto';
 import { WatchdogEngine } from '../engine.mjs';
 import { assess, quotaStatus, isUuid, goalIdentity, latestTurn } from '../policy.mjs';
 import { safeRepository } from '../observability/metadata.mjs';
+import { ACTIVITY_FRESH_MS, INACTIVITY_THRESHOLD_MS } from '../observability/activity.mjs';
+
+const unavailableActivity=(reason,lastEventAt=null)=>({source:'local-session-log',status:'Unavailable',reason,lastEventAt,pendingRequests:null,executingTools:null,authoritativeToolState:'Unavailable',heuristic:{status:'Unavailable',reason,thresholdMs:INACTIVITY_THRESHOLD_MS,automaticAction:false}});
 
 export const DEFAULT_SETTINGS = Object.freeze({ recoveryPollSeconds: 10, historySampleSeconds: 60, maxConcurrentResumes: 1, reservePercent: 10, maxRetries: 3, cooldownSeconds: 30, autoResume: false });
 export const CONTINUATION_TEXT = 'Codex Control Center：实时额度查询已确认所有阻塞窗口可用。请在本聊天继续原有未完成工作；先核对当前进度、工作区和仍在运行的后台命令，接续尚未完成的步骤。保留原目标、模型、权限与预算；若已经完成或需要用户决定，请说明并停止。';
@@ -68,6 +71,28 @@ export class ControlCenterCore {
     this.settings = next; this.store.setSetting('core-settings', next); this.nextQuotaPollAt = Math.min(this.nextQuotaPollAt, this.now()); return this.snapshot();
   }
   policy(id) { return { ...defaults(this.settings), ...this.store.getThreadPolicy(id) }; }
+  observeActivity(record,{canonical=false}={}) {
+    if(!this.observability||!isUuid(record?.threadId)||!isUuid(record.currentTurnId))return;
+    this.activityObservations??=new WeakMap();
+    const previous=this.activityObservations.get(record);
+    const slot={turnId:record.currentTurnId,observedAt:record.lastActivityAt,canonical,result:previous?.turnId===record.currentTurnId?previous.result:undefined};this.activityObservations.set(record,slot);
+    const params={verified:canonical,threadId:record.threadId,turnId:slot.turnId,status:record.currentTurnStatus,startedAt:record.turnStartedAt,observedAt:slot.observedAt,runtimeType:record.runtimeType,runtimeFlags:record.runtimeFlags};
+    return Promise.resolve().then(()=>this.observability.call('activity',params)).then(value=>{
+      if(this.engine.state.records[record.threadId]!==record||this.activityObservations.get(record)!==slot||record.currentTurnId!==slot.turnId||record.currentTurnStatus!==params.status)return;
+      record.activity=value?.source==='local-session-log'&&typeof value.status==='string'?{...value,projectedAt:this.now()}:unavailableActivity('activity-observation-unavailable');
+      slot.result=record.activity;
+    }).catch(()=>{
+      if(this.activityObservations.get(record)===slot&&record.currentTurnId===slot.turnId){record.activity=unavailableActivity('activity-observation-unavailable');slot.result=record.activity;}
+    });
+  }
+  activityForSnapshot(record) {
+    const slot=this.activityObservations?.get(record),value=slot?.result,now=this.now();
+    const last=slot?.turnId===record.currentTurnId?value?.lastEventAt:null;
+    if(record.currentTurnStatus!=='inProgress')return unavailableActivity('canonical-turn-not-active',last??null);
+    if(!slot||slot.canonical!==true||slot.turnId!==record.currentTurnId||!value)return unavailableActivity('activity-observation-unavailable');
+    if(!Number.isSafeInteger(value.projectedAt)||!Number.isSafeInteger(value.indexedAt)||value.projectedAt>now+1000||value.indexedAt>now+1000||now-value.projectedAt>ACTIVITY_FRESH_MS||now-value.indexedAt>ACTIVITY_FRESH_MS||now-record.lastActivityAt>ACTIVITY_FRESH_MS)return unavailableActivity('activity-observation-stale',last??null);
+    return value;
+  }
   requiresRecoveryReview(){return this.store.getSetting('database-recovery',{})?.requiresReview===true;}
   threadEnabled(id) { const p=this.policy(id); return p.autoResume && p.allowAutomaticStart && !p.manualPaused && !p.neverAutoResume; }
   assertThreadEnabled(id) {
@@ -171,6 +196,7 @@ export class ControlCenterCore {
             record.quotaAttribution={status:'Unavailable',reason:'Subscription quota changes cannot be reliably assigned to a concurrent thread'};
             record.metadataSource='verified-desktop-ipc';
             delete record.unavailableReason;
+            void this.observeActivity(record,{canonical:state.turnHistory?.kind==='canonical'});
           }
           if(this.observability&&turn?.turnId){let salt=this.store.getSetting('observability:goal-key-salt',null);if(!salt){salt=randomBytes(32).toString('hex');this.store.setSetting('observability:goal-key-salt',salt);}const context=observedTurnContext(state,turn,{threadId:id,salt});if(record)record.goalAttribution={status:context.kind==='goal'?'Observed':context.kind==='ordinary'?'Not a Goal':'Unavailable',reason:context.goalAttributionReason};void this.observability.call('observe-turn',{threadId:id,turnId:turn.turnId,...context,repository:safeRepository(state.gitInfo?.originUrl),model:typeof state.latestModel==='string'?state.latestModel:undefined,rawServiceTier:turn.params?.serviceTier??state.latestThreadSettings?.serviceTier,effort:state.latestReasoningEffort,observedAt:this.now(),source:this.adapter.source==='official-app-server'?'desktop-ipc':this.adapter.source}).catch(()=>{});}
           if (record && decision.action === 'wait' && ['approval-or-input-pending','user-message-pending','goal-user-confirmation'].includes(decision.reason)) { this.engine.transition(record,'needsUser',decision.reason); }
@@ -235,7 +261,7 @@ export class ControlCenterCore {
   snapshot() {
     return { mode: this.execute ? 'execute' : 'observe', settings: this.settings, compatibility: this.adapter.compatibility, quota: this.quota,adapter:this.adapter.source,database:{schemaVersion:this.store.db?.prepare('PRAGMA user_version').get().user_version??null,recovery:this.store.getSetting('database-recovery',{}),requiresReview:this.requiresRecoveryReview()},
       lastQuotaPollAt: this.lastQuotaPollAt, nextQuotaPollAt: this.nextQuotaPollAt, nextHistorySampleAt: this.nextHistorySampleAt, lastError: this.lastError,
-      tasks: Object.values(this.engine.state.records).map(r => ({ ...r, policy: this.policy(r.threadId),nextRecoveryCheckAt:this.nextQuotaPollAt,tokenUsage:{status:'Available through separate observed analytics ledgers; not a reconciled global consumption total',source:'local-session-log'} })), activeResumes: this.active.size };
+      tasks: Object.values(this.engine.state.records).map(r => ({ ...r, activity:this.activityForSnapshot(r),policy: this.policy(r.threadId),nextRecoveryCheckAt:this.nextQuotaPollAt,tokenUsage:{status:'Available through separate observed analytics ledgers; not a reconciled global consumption total',source:'local-session-log'} })), activeResumes: this.active.size };
   }
   occupiedThreads() {
     const occupied=new Set(Object.values(this.engine.state.records).filter(r=>r.phase==='watching'&&['running','continuation-accepted','new-turn-observed','goal-between-turns'].includes(r.reason)).map(r=>r.threadId));

@@ -12,7 +12,7 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import "./style.css";
 import { quotaMetrics } from './quota-metrics.mjs';
 import PricingSettings from './PricingSettings';
-import ThreadDetails, {type CurrentGoal} from './ThreadDetails';
+import ThreadDetails, {ActivityStatus,type Activity,type CurrentGoal} from './ThreadDetails';
 import AccountActivity from './AccountActivity';
 
 type WindowQuota = {
@@ -47,7 +47,7 @@ type Task = {
   failedAt?: number;
   lastTurnId?: string;
   policy: Policy;
-  currentGoal?:CurrentGoal;
+  currentGoal?:CurrentGoal;activity?:Activity;
   repository?:string|null;currentTurnId?:string|null;currentTurnStatus?:string|null;turnStartedAt?:number|null;turnEndedAt?:number|null;modelContextWindow?:number|null;collaborationMode?:string|null;runtimeType?:string|null;runtimeFlags?:string[];metadataSource?:string;nextRecoveryCheckAt?:number;quotaAttribution?:{status:string;reason:string};
 };
 type Snapshot = {
@@ -692,6 +692,8 @@ function ThreadList({
             >
               {status(task)}
             </span>
+            {(task.activity?.status==='ObservedPendingRequest'||task.activity?.status==='ObservedExecuting'||task.activity?.status==='Stale')&&<ActivityStatus activity={task.activity}/>}
+            {task.activity?.heuristic?.status==='HeuristicSuspectedInactivity'&&<span className="quality">{t("Suspected inactivity (heuristic)")}</span>}
             {!compact && (
               <>
                 <span className="quality">
