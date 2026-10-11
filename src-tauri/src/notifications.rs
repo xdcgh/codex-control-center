@@ -2,6 +2,8 @@ use serde_json::Value;
 use std::collections::HashSet;
 pub const TYPES:[&str;8]=["quotaExhausted","taskWaiting","quotaRecovered","threadResumed","resumeFailed","unknownVersion","weeklyLow","naturalCycle"];
 pub struct Notice{pub kind:&'static str,pub title:&'static str,pub body:&'static str}
+/// Explicit user-triggered test; never enters the recovery planner or its event ledger.
+pub fn test_notice(prefs:&Value)->Option<Notice>{if prefs["notifications"].as_bool().unwrap_or(true){Some(Notice{kind:"test",title:"Notification test (TEST)",body:"This is a notification test only. No task or quota state changed."})}else{None}}
 #[derive(Default)]
 pub struct Planner{seen:HashSet<String>,last_event:Option<u64>}
 impl Planner{
@@ -41,6 +43,8 @@ impl Planner{
 }
 #[cfg(test)]mod tests{
  use super::*;use serde_json::json;
+ #[test]fn explicit_test_respects_master_and_is_not_a_recovery_event(){let prefs=json!({"notifications":false});assert!(test_notice(&prefs).is_none());let enabled=json!({"notifications":true,"notificationTypes":{"quotaRecovered":false}});let before=enabled.clone();let notice=test_notice(&enabled).unwrap();assert_eq!(notice.kind,"test");assert!(notice.title.contains("TEST"));assert!(!TYPES.contains(&notice.kind));assert_eq!(enabled,before);}
+
  #[test]fn toggles_are_independent_and_master_disables_all(){let prefs=json!({"notifications":true,"notificationTypes":{"quotaExhausted":false}});assert!(!Planner::enabled(&prefs,"quotaExhausted"));assert!(Planner::enabled(&prefs,"threadResumed"));assert!(!Planner::enabled(&json!({"notifications":false}),"threadResumed"));}
  #[test]fn actual_transitions_and_events_are_not_repeated(){let mut planner=Planner::default();let ready=json!({"quota":{"ready":true,"known":true},"compatibility":{"verified":true},"lastQuotaPollAt":1});assert!(planner.plan(None,&ready,&[json!({"id":1,"event":"auto-resumed"})],None).is_empty());let limited=json!({"quota":{"ready":false,"known":true},"compatibility":{"verified":true},"lastQuotaPollAt":2});let events=vec![json!({"id":2,"event":"auto-resumed","details":{"manual":false}})];let notices=planner.plan(Some(&ready),&limited,&events,None);assert_eq!(notices.len(),2);assert!(planner.plan(Some(&limited),&limited,&events,None).is_empty());}
  #[test]fn pending_or_simulated_natural_reports_never_notify_completion(){let mut planner=Planner::default();let current=json!({"compatibility":{"verified":true}});for status in ["INCOMPLETE","SIMULATED","UNKNOWN"]{let report=json!({"json":{"schemaVersion":1,"status":status,"cycles":[{"cycleFingerprint":"unit-pending","status":status,"episode":{"status":"PASS"},"goalOutcome":"PENDING"}]}});assert!(planner.plan(None,&current,&[],Some(&report)).is_empty());}let pass=json!({"json":{"schemaVersion":1,"status":"PASS","cycles":[{"cycleFingerprint":"unit-completed","status":"PASS","goalOutcome":"COMPLETED"}]}});assert_eq!(planner.plan(None,&current,&[],Some(&pass)).len(),1);assert!(planner.plan(None,&current,&[],Some(&pass)).is_empty());}

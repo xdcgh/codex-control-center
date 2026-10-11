@@ -4,6 +4,8 @@ A local-first Windows control center for OpenAI Codex — quota monitoring, thre
 
 This is an unofficial project, not affiliated with OpenAI. It stores application analytics locally and sends no application telemetry. API-equivalent estimates are based on public API prices and are not Codex subscription bills. Private Desktop protocol compatibility can change; unknown versions must remain in read-only safe mode.
 
+The interface supports Simplified Chinese and English. It follows the Windows UI language automatically, with an explicit language selector in Settings; the tray, widget and notifications follow the same choice. Chinese regional tags use the Simplified Chinese catalog, and unsupported languages fall back to English.
+
 Development follows the [roadmap](ROADMAP.md). [Progress and validation](PROGRESS.md) distinguish implemented features, isolated tests, live Desktop checks, and the natural quota cycle. A working GUI alone is not release acceptance.
 
 ![Installed dashboard with task identities hidden](docs/screenshots/dashboard.png)

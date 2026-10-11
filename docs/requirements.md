@@ -1,5 +1,7 @@
 # 项目目标：将现有 codex-quota-watchdog 升级为完整的 Windows Codex Control Center
 
+> User amendment, 2026-10-11: Windows physical-reboot acceptance is deferred to the next version and does not block this version. The application must support Chinese and English, automatically follow the Windows UI language by default, and allow switching between automatic, Chinese and English. This includes the main interface, tray, notifications and widget. Other requirements below remain in scope.
+
 你需要把目前已经可以工作的 `codex-quota-watchdog` 继续发展为一个长期可维护、可开源、带 Windows GUI 的 Codex 管理与观测软件。
 
 这不是简单做一个额度显示器。

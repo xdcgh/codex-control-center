@@ -59,24 +59,35 @@ export function assess(state, { catalogPersistent = false } = {}) {
 }
 
 export function quotaStatus(response, nowMs) {
+  const modern = Object.hasOwn(response ?? {}, 'ordinaryUsageAllowed');
+  if (modern && typeof response.ordinaryUsageAllowed !== 'boolean') return { known: false, reason: 'ordinary-usage-permission-unavailable' };
   let bucket;
   if (response?.rateLimitsByLimitId) bucket = response.rateLimitsByLimitId.codex;
   else if (!response?.rateLimits?.limitId || response.rateLimits.limitId === 'codex') bucket = response?.rateLimits;
   if (!bucket) return { known: false, reason: 'codex-bucket-missing' };
-  if (bucket.spendControlReached || bucket.individualLimit != null || (bucket.rateLimitReachedType != null && bucket.rateLimitReachedType !== 'rate_limit_reached')) return { known: false, reason: 'non-window-limit' };
+  // Additional model buckets constrain recovery; they never replace Codex usage.
+  const buckets = response.rateLimitsByLimitId ? Object.values(response.rateLimitsByLimitId) : [bucket];
+  if (buckets.some(b => !b || typeof b !== 'object' || b.spendControlReached || b.individualLimit != null || (b.rateLimitReachedType != null && b.rateLimitReachedType !== 'rate_limit_reached'))) return { known: false, reason: 'non-window-limit' };
+  if (modern && buckets.some(b => b.spendControlReached !== false)) return { known: false, reason: 'spend-control-state-unavailable' };
   const windows = [bucket.primary, bucket.secondary].filter((window) => window != null);
+  const allWindows = buckets.flatMap(b => [b.primary, b.secondary].filter(w => w != null));
   const valid = (window) => Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && window.usedPercent <= 100 && (window.usedPercent === 0 ? (window.resetsAt == null || (Number.isFinite(window.resetsAt) && window.resetsAt > 0)) : (Number.isFinite(window.resetsAt) && window.resetsAt > 0)) && Number.isFinite(window.windowDurationMins) && window.windowDurationMins > 0;
-  if (!windows.length || windows.some((window) => !valid(window))) return { known: false, reason: 'quota-fields-invalid' };
+  if (buckets.some(b => b.primary == null && b.secondary == null) || allWindows.some((window) => !valid(window))) return { known: false, reason: 'quota-fields-invalid' };
   const fiveHour = windows.find((window) => window.windowDurationMins === 300);
-  if (!fiveHour) return { known: false, reason: 'five-hour-window-missing' };
-  const exhausted = windows.filter((window) => window.usedPercent >= 100);
-  const deadlines = [fiveHour.resetsAt, ...exhausted.map((window) => window.resetsAt)].filter((value) => Number.isFinite(value) && value > 0).map((value) => value * 1000);
+  const weekly = windows.find(window => window.windowDurationMins === 10080);
+  // Account-validated permission permits a reported weekly-only plan. Never
+  // invent the absent five-hour window or infer modern recovery from percentages.
+  if (!fiveHour && !(modern && weekly && windows.every(w => w.windowDurationMins === 10080))) return { known: false, reason: 'five-hour-window-missing' };
+  const exhausted = allWindows.filter((window) => window.usedPercent >= 100);
+  const deadlines = [fiveHour?.resetsAt ?? weekly?.resetsAt, ...exhausted.map((window) => window.resetsAt)].filter((value) => Number.isFinite(value) && value > 0).map((value) => value * 1000);
   const resetsAtMs = deadlines.length ? Math.max(...deadlines) : null;
   // An empty newly reset window can retain its last deadline, or have no next
   // deadline until its first use. Non-empty expired snapshots are not trusted.
-  const stale = windows.some((window) => window.usedPercent > 0 && window.resetsAt * 1000 <= nowMs);
-  return { known: true, ready: !stale && exhausted.length === 0 && !bucket.rateLimitReachedType,
-    resetsAtMs, fiveHourRemainingPercent: 100 - fiveHour.usedPercent,
+  const stale = allWindows.some((window) => window.usedPercent > 0 && window.resetsAt * 1000 <= nowMs);
+  const serviceLimited = buckets.some(b => b.rateLimitReachedType != null) || (modern && !response.ordinaryUsageAllowed);
+  return { known: true, ready: !stale && exhausted.length === 0 && !serviceLimited,
+    resetsAtMs, fiveHourRemainingPercent: fiveHour ? 100 - fiveHour.usedPercent : null,
+    remainingPercent: Math.min(...allWindows.map(w => 100 - w.usedPercent)),
     weeklyRemainingPercent: windows.find((window) => window.windowDurationMins === 10080) ? 100 - windows.find((window) => window.windowDurationMins === 10080).usedPercent : null,
-    reason: stale ? 'quota-snapshot-stale' : exhausted.length ? 'quota-exhausted' : bucket.rateLimitReachedType ? 'service-still-limited' : 'quota-available' };
+    reason: stale ? 'quota-snapshot-stale' : exhausted.length ? 'quota-exhausted' : serviceLimited ? 'service-still-limited' : 'quota-available' };
 }

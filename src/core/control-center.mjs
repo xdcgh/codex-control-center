@@ -186,7 +186,7 @@ export class ControlCenterCore {
   }
   async schedule() {
     const queue = Object.values(this.engine.state.records).filter(r => r.failureTurnId && r.phase === 'waitingQuota' && !r.unavailableReason).map(r => ({ r, p: this.policy(r.threadId) }))
-      .filter(({r,p}) => p.autoResume && p.allowAutomaticStart && !p.neverAutoResume && !p.manualPaused && p.retryCount < p.maxRetries && p.nextAttemptAt <= this.now() && (p.priority < 2 || this.quota.fiveHourRemainingPercent > this.settings.reservePercent))
+      .filter(({r,p}) => p.autoResume && p.allowAutomaticStart && !p.neverAutoResume && !p.manualPaused && p.retryCount < p.maxRetries && p.nextAttemptAt <= this.now() && (p.priority < 2 || (this.quota.fiveHourRemainingPercent ?? this.quota.remainingPercent) > this.settings.reservePercent))
       .sort((a,b) => a.p.priority-b.p.priority || a.r.failedAt-b.r.failedAt || a.p.order-b.p.order);
     // Occupancy includes already resumed work; avoid releasing a slot merely on receipt of a start acknowledgement.
     const available = Math.max(0,this.settings.maxConcurrentResumes-this.occupiedThreads().size);

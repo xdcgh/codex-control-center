@@ -22,7 +22,7 @@ export class OfficialAppServerAdapter {
   }
   readQuota() { return this.request('account/rateLimits/read'); }
   getGoal(id) { return this.request('thread/goal/get', { threadId: id }); }
-  readThread(id) { return this.request('thread/read', { threadId: id, includeTurns: true }); }
+  readThread(id, { includeTurns = false } = {}) { return this.request('thread/read', { threadId: id, includeTurns }); }
   async listModels() {
     const models = []; let cursor = null;
     for (let page = 0; page < 100; page++) {
@@ -56,7 +56,7 @@ export class CompatibilityProbe {
     try {
       const result = spawnSync(this.config.codexBin, ['--version'], { windowsHide: true, encoding: 'utf8', timeout: 5000 });
       if (result.status === 0) cliVersion = result.stdout.trim().replace(/^codex-cli /, '');
-      if (cliVersion !== SUPPORTED.cliVersion) issues.push('cli-version-unverified');
+      if (cliVersion !== (bundle?.supportedCliVersion ?? SUPPORTED.cliVersion)) issues.push('cli-version-unverified');
     } catch { issues.push('cli-version-unavailable'); }
     return { verified: issues.length === 0, safeMode: issues.length !== 0, cliVersion, desktopVersion: bundle?.appVersion ?? null,
       protocolVersion: { ...SUPPORTED.versions }, protocolHash: bundle?.protocolHash ?? null, issues,
@@ -123,7 +123,7 @@ export class CodexAdapter {
       await check('modelCatalog', async () => { const models = await this.official.listModels(); return { count: models.length, models: models.map(m => ({ id: m.id, model: m.model, displayName: m.displayName, supportedReasoningEfforts: m.supportedReasoningEfforts })) }; });
       if (threadId) {
         if (!isUuid(threadId)) throw new Error('invalid-thread-id');
-        await check('threadRead', async () => { const result = await this.official.readThread(threadId); return { found: !!result.thread, turns: result.thread?.turns?.length ?? null }; });
+        await check('threadRead', async () => { const result = await this.official.readThread(threadId); return { found: !!result.thread, turnsRequested: false, turns: null }; });
         await check('goalRead', async () => { const { goal } = await this.official.getGoal(threadId); return { present: goal != null, status: goal?.status ?? null }; });
         await check('dryRunResume', async () => { const { state } = await this.snapshot(threadId); const decision = assess(state, { catalogPersistent: true }); return { performedMutation: false, decision: decision.action, reason: decision.reason ?? null, compatible: report.compatibility.verified }; });
       } else for (const name of ['threadRead','goalRead','dryRunResume']) report.checks[name] = { status: 'not-run', reason: 'select-existing-thread-id' };

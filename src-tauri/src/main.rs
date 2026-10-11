@@ -9,6 +9,18 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 mod pipe_helper;
 mod config_binding;
 mod notifications;
+mod locale;
+struct TrayLabels {items:Vec<MenuItem<tauri::Wry>>,snapshot:Mutex<Option<Value>>}
+fn refresh_tray(app:&tauri::AppHandle,prefs:&Value){
+ let language=locale::preference_locale(prefs);
+ for window in app.webview_windows().values(){let _=window.set_title(&locale::text(language,"Codex Control Center"));}
+ let Some(labels)=app.try_state::<TrayLabels>()else{return;};
+ for (item,text) in labels.items.iter().skip(3).zip(["Open Dashboard","Open Threads","Show Widget","Refresh","Pause Auto Resume","Resume Eligible Tasks","Start with Windows","Diagnostics","Exit UI (keep background service)","Exit UI and background service"]){let _=item.set_text(locale::text(language,text));}
+ let snapshot=labels.snapshot.lock().ok().and_then(|value|value.clone());let mut quota_labels=Vec::new();
+ for(index,duration,label)in [(0,300,"5h"),(1,10080,"7d")]{let window=snapshot.as_ref().and_then(|s|s["quota"]["windows"].as_array()).and_then(|windows|windows.iter().find(|w|w["durationMinutes"]==duration));let reset=locale::reset_time(language,window.and_then(|w|w["resetsAt"].as_i64()),duration==10080);let text=locale::quota_label(language,label,window.and_then(|w|w["remainingPercent"].as_f64()),&reset);let _=labels.items[index].set_text(&text);quota_labels.push(text);}
+ let tasks=snapshot.as_ref().and_then(|s|s["tasks"].as_array());let working=tasks.map(|t|t.iter().filter(|t|t["phase"]=="watching"&&t["reason"]=="running").count()).unwrap_or(0);let waiting=tasks.map(|t|t.iter().filter(|t|t["phase"]=="waitingQuota").count()).unwrap_or(0);let summary=if tasks.is_some(){locale::running_label(language,working,waiting)}else{format!("{}: {} · {}: {}",locale::text(language,"Running"),locale::text(language,"unavailable"),locale::text(language,"Waiting quota"),locale::text(language,"unavailable"))};let _=labels.items[2].set_text(summary);
+ if let Some(icon)=app.tray_by_id("main-tray"){let _=icon.set_tooltip(Some(format!("{}\n{}",locale::text(language,"Codex Control Center"),quota_labels.join("\n"))));}
+}
 
 struct Service { config: PathBuf, preferences: Mutex<Value>, preferences_file: PathBuf,startup_error:Option<String> }
 
@@ -105,12 +117,20 @@ async fn core_request(app:tauri::AppHandle,method:String,params:Option<Value>)->
 #[tauri::command]
 fn ui_preferences(app:tauri::AppHandle,update:Option<Value>)->Result<Value,String>{
  let service=app.try_state::<Service>().ok_or("app-starting")?;let mut prefs=service.preferences.lock().map_err(|_|"preferences-lock-failed")?;
- if let Some(value)=update {let object=value.as_object().ok_or("invalid-preferences")?;let current=prefs.as_object_mut().ok_or("invalid-preferences")?;for(key,value)in object{if !["theme","privacy","widgetExpanded","widgetLocked","widgetOpacity","widgetPinned","notifications","notificationTypes","widgetVisible"].contains(&key.as_str()){return Err("unknown-preference".into());}if key=="notificationTypes"{let types=value.as_object().ok_or("invalid-notification-types")?;if types.iter().any(|(name,value)|!notifications::TYPES.contains(&name.as_str())||!value.is_boolean()){return Err("invalid-notification-type".into());}}current.insert(key.clone(),value.clone());}
+ if let Some(value)=update {let object=value.as_object().ok_or("invalid-preferences")?;let mut next=prefs.clone();let current=next.as_object_mut().ok_or("invalid-preferences")?;for(key,value)in object{if !["theme","privacy","widgetExpanded","widgetLocked","widgetOpacity","widgetPinned","notifications","notificationTypes","widgetVisible","language"].contains(&key.as_str()){return Err("unknown-preference".into());}if key=="language"&&!matches!(value.as_str(),Some("auto"|"zh-CN"|"en")){return Err("invalid-language".into());}if key=="notificationTypes"{let types=value.as_object().ok_or("invalid-notification-types")?;if types.iter().any(|(name,value)|!notifications::TYPES.contains(&name.as_str())||!value.is_boolean()){return Err("invalid-notification-type".into());}}current.insert(key.clone(),value.clone());}
  if !service.preferences_file.as_os_str().is_empty(){fs::create_dir_all(service.preferences_file.parent().ok_or("preferences-parent-missing")?).map_err(|_|"preferences-save-failed")?;
- fs::write(&service.preferences_file,serde_json::to_vec_pretty(&*prefs).map_err(|_|"preferences-invalid")?).map_err(|_|"preferences-save-failed")?;}
+ fs::write(&service.preferences_file,serde_json::to_vec_pretty(&next).map_err(|_|"preferences-invalid")?).map_err(|_|"preferences-save-failed")?;}
+ *prefs=next;
  if let Some(window)=app.get_webview_window("widget"){let _=window.set_always_on_top(prefs["widgetPinned"].as_bool().unwrap_or(true));}
- let _=app.emit("preferences/updated",prefs.clone()); }
- Ok(prefs.clone())
+ refresh_tray(&app,&prefs);let _=app.emit("preferences/updated",locale::exposed_preferences(&prefs)); }
+ Ok(locale::exposed_preferences(&prefs))
+}
+
+#[tauri::command]
+fn send_test_notification(app:tauri::AppHandle)->Result<bool,String>{
+ let service=app.try_state::<Service>().ok_or("app-starting")?;let prefs=service.preferences.lock().map_err(|_|"preferences-lock-failed")?;
+ let Some(notice)=notifications::test_notice(&prefs)else{return Ok(false);};let language=locale::preference_locale(&prefs);
+ app.notification().builder().title(locale::text(language,notice.title)).body(locale::text(language,notice.body)).show().map_err(|_|"test-notification-send-failed")?;Ok(true)
 }
 
 #[tauri::command]
@@ -192,6 +212,7 @@ fn tray(app:&tauri::AppHandle)->Result<(),Box<dyn std::error::Error>>{
   "dashboard"=>show(app,"main",Some("Dashboard")),"threads"=>show(app,"main",Some("Threads")),"widget"=>show(app,"widget",None),"doctor"=>show(app,"main",Some("Diagnostics")),
   "autostart"=>{if let Ok(enabled)=get_autostart(app.clone()){let _=set_autostart(app.clone(),!enabled);}},"exit-ui"=>app.exit(0),
   "refresh"|"pause"|"resume"|"exit-all"=>{let handle=app.clone();let id=id.to_string();tauri::async_runtime::spawn(async move{let Some(service)=handle.try_state::<Service>()else{return;};match id.as_str(){"refresh"=>{let _=request(&service,"refresh",json!({})).await;},"pause"=>{let _=request(&service,"settings/update",json!({"autoResume":false})).await;},"resume"=>{let _=request(&service,"settings/update",json!({"autoResume":true})).await;let _=request(&service,"refresh",json!({})).await;},"exit-all"=>{let _=request(&service,"shutdown",json!({})).await;handle.exit(0);},_=>{}}});},_=>{}}}).build(app)?;
+ app.manage(TrayLabels{items,snapshot:Mutex::new(None)});if let Some(service)=app.try_state::<Service>(){if let Ok(prefs)=service.preferences.lock(){refresh_tray(app,&prefs);}}
  let handle=app.clone();tauri::async_runtime::spawn(async move{
   let mut previous:Option<Value>=None;
   let mut planner=notifications::Planner::default();let mut notification_tick=0;
@@ -199,15 +220,12 @@ fn tray(app:&tauri::AppHandle)->Result<(),Box<dyn std::error::Error>>{
    let Some(service)=handle.try_state::<Service>()else{tokio::time::sleep(Duration::from_millis(50)).await;continue;};let result=request(&service,"snapshot",json!({})).await;
    match result{
     Ok(value)=>{
-     let windows=value["quota"]["windows"].as_array();
-     let mut quota_labels=Vec::new();for(duration,item,label)in [(300,&quota5,"5h"),(10080,&quota7,"7d")]{let window=windows.and_then(|ws|ws.iter().find(|w|w["durationMinutes"]==duration));let reset=window.and_then(|w|w["resetsAt"].as_i64()).and_then(chrono::DateTime::from_timestamp_millis).map(|date|date.with_timezone(&chrono::Local).format(if duration==300{"%H:%M"}else{"%A %H:%M"}).to_string()).unwrap_or("unavailable".into());let text=window.and_then(|w|w["remainingPercent"].as_f64()).map(|left|format!("{label}: {left:.0}% remaining · reset {reset}")).unwrap_or(format!("{label}: unavailable"));let _=item.set_text(&text);quota_labels.push(text);}
-     if let Some(icon)=handle.tray_by_id("main-tray"){let _=icon.set_tooltip(Some(format!("Codex Control Center\n{}",quota_labels.join("\n"))));}
-     let tasks=value["tasks"].as_array();let working=tasks.map(|t|t.iter().filter(|t|t["phase"]=="watching"&&t["reason"]=="running").count()).unwrap_or(0);let waiting=tasks.map(|t|t.iter().filter(|t|t["phase"]=="waitingQuota").count()).unwrap_or(0);let _=running.set_text(format!("Running: {working} · Waiting quota: {waiting}"));
-     let _=handle.emit("core/snapshot",&value);
      let prefs=service.preferences.lock().map(|p|p.clone()).unwrap_or(json!({"notifications":false}));
+     if let Some(labels)=handle.try_state::<TrayLabels>(){if let Ok(mut snapshot)=labels.snapshot.lock(){*snapshot=Some(value.clone());}}refresh_tray(&handle,&prefs);
+     let _=handle.emit("core/snapshot",&value);
      let events=request(&service,"events/list",json!({})).await.unwrap_or(json!([]));notification_tick+=1;
      let natural=if notification_tick%30==0&&notifications::Planner::enabled(&prefs,"naturalCycle"){request(&service,"natural/report",json!({})).await.ok()}else{None};
-     for notice in planner.plan(previous.as_ref(),&value,events.as_array().map(Vec::as_slice).unwrap_or(&[]),natural.as_ref()){if notifications::Planner::enabled(&prefs,notice.kind){let _=handle.notification().builder().title(notice.title).body(notice.body).show();}}
+     for notice in planner.plan(previous.as_ref(),&value,events.as_array().map(Vec::as_slice).unwrap_or(&[]),natural.as_ref()){let notice_prefs=service.preferences.lock().map(|p|p.clone()).unwrap_or(json!({"notifications":false}));if notifications::Planner::enabled(&notice_prefs,notice.kind){let language=locale::preference_locale(&notice_prefs);let _=handle.notification().builder().title(locale::text(language,notice.title)).body(locale::text(language,notice.body)).show();}}
      previous=Some(value);
     },Err(reason)=>{let _=handle.emit("core/disconnected",json!({"reason":reason}));}
    }
@@ -224,12 +242,12 @@ fn main(){
  .plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build())
  .plugin(tauri_plugin_notification::init())
  .plugin(tauri_plugin_window_state::Builder::default().build())
- .invoke_handler(tauri::generate_handler![core_request,ui_preferences,show_window,set_autostart,get_autostart,save_diagnostics,restart_background,recover_database])
+ .invoke_handler(tauri::generate_handler![core_request,ui_preferences,send_test_notification,show_window,set_autostart,get_autostart,save_diagnostics,restart_background,recover_database])
  .on_window_event(|window,event|{if let tauri::WindowEvent::CloseRequested{api,..}=event{api.prevent_close();let _=window.hide();}})
  .setup(|app|{
     let handle=app.handle().clone();let discovery=discover_config(&handle);let startup_error=discovery.as_ref().err().cloned();let config=discovery.unwrap_or_default();
     let preferences_file=owner_anchor(&handle).ok().and_then(|anchor|anchor.parent().map(|p|p.join("ui-settings.json"))).unwrap_or_default();
-    let preferences=fs::read(&preferences_file).ok().and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or(json!({"theme":"dark","privacy":false,"widgetExpanded":false,"widgetLocked":false,"widgetOpacity":0.95,"widgetPinned":true,"notifications":true,"widgetVisible":false}));
+    let preferences=fs::read(&preferences_file).ok().and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or(json!({"language":"auto","theme":"dark","privacy":false,"widgetExpanded":false,"widgetLocked":false,"widgetOpacity":0.95,"widgetPinned":true,"notifications":true,"widgetVisible":false}));
     app.manage(Service{config,preferences:Mutex::new(preferences),preferences_file,startup_error});
     restore_visible_windows(&handle);
     if std::env::args().any(|arg|arg=="--enable-autostart"){let _=set_autostart(handle.clone(),true);}

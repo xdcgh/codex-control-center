@@ -43,3 +43,19 @@ test('an empty reset window does not deadlock waiting for the next model request
   const empty = limits({ used: 0 }); empty.rateLimitsByLimitId.codex.primary.resetsAt = null;
   assert.equal(quotaStatus(empty, NOW).ready, true);
 });
+
+test('current weekly-only plans require explicit account permission and retain missing five-hour data', () => {
+  const q=limits({used:72});q.ordinaryUsageAllowed=true;q.rateLimitsByLimitId.codex.primary.windowDurationMins=10080;q.rateLimitsByLimitId.codex.secondary=null;q.rateLimitsByLimitId.codex.spendControlReached=false;
+  const result=quotaStatus(q,NOW);assert.equal(result.known,true);assert.equal(result.ready,true);assert.equal(result.fiveHourRemainingPercent,null);assert.equal(result.weeklyRemainingPercent,28);assert.equal(result.remainingPercent,28);
+  q.ordinaryUsageAllowed=false;assert.equal(quotaStatus(q,NOW).ready,false);
+  q.ordinaryUsageAllowed=null;assert.equal(quotaStatus(q,NOW).known,false);
+  delete q.ordinaryUsageAllowed;assert.equal(quotaStatus(q,NOW).known,false);
+});
+test('current model buckets, missing spend control and permission cannot bypass recovery gates', () => {
+  const q=limits({used:0});q.ordinaryUsageAllowed=true;q.rateLimitsByLimitId.codex.spendControlReached=false;
+  q.rateLimitsByLimitId.model={primary:{usedPercent:100,windowDurationMins:300,resetsAt:(NOW+60000)/1000},secondary:null,spendControlReached:false};
+  assert.equal(quotaStatus(q,NOW).ready,false);
+  q.rateLimitsByLimitId.model.primary.usedPercent=10;assert.equal(quotaStatus(q,NOW).ready,true);
+  q.rateLimitsByLimitId.model.primary.windowDurationMins=null;assert.equal(quotaStatus(q,NOW).known,false);
+  delete q.rateLimitsByLimitId.model;q.rateLimitsByLimitId.codex.spendControlReached=null;assert.equal(quotaStatus(q,NOW).known,false);
+});

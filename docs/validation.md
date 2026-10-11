@@ -1,6 +1,6 @@
 # Validation record and phase boundaries
 
-Updated 2026-10-07. This page separates baseline evidence, research, simulations and live natural-cycle acceptance. A result in one category does not imply the others passed.
+Updated 2026-10-11. Historical sections retain their observation dates. This page separates baseline evidence, research, simulations and live natural-cycle acceptance. A result in one category does not imply the others passed. Physical Windows reboot/startup restoration is explicitly deferred to the next version by the user; it is not an outstanding gate for this version.
 
 ## Phase 0 — Baseline
 
@@ -105,7 +105,7 @@ This is a tool-presence record, not a build result. The task-specific Rust toolc
 | Phase | Required evidence | Current state |
 | --- | --- | --- |
 | Phase 2 — Core v2 | Deterministic parser/state/scheduler tests; app-server integration with explicit authorization; durable-state restart tests; no duplicate dispatch | **Fixture suite PASS (52/52 at `0288b89`); phase remains pending** for runtime integration and owner handover |
-| Phase 3 — Desktop MVP | Packaged Tauri shell; tray/window/widget behavior and UI smoke | Tauri app is installed and running; Normal/Goal one-turn smokes passed. Full tray/widget/autostart/restore acceptance remains pending. |
+| Phase 3 — Desktop MVP | Packaged Tauri shell; tray/window/widget behavior and UI smoke | Tauri app is installed and running; Normal/Goal one-turn smokes passed. Actual tray clicks/toasts and final installed UI QA remain pending; physical reboot/autostart/widget restoration is deferred to the next version. |
 | Phase 4 — Observability | Quota history, token attribution and price-policy tests with exact/estimated/unavailable distinctions | Targeted tests **25/25 PASS**; remains pending complete root/fork/account scope and runtime observation |
 | Phase 5 — Performance | Instrumented client timings with labels that distinguish visible end-to-end timing from unavailable model timing | Pending |
 | Phase 6 — Scheduler | Queue, concurrency, retry and reserve policy tests | Pending |
@@ -138,7 +138,7 @@ Root rebuilt through the source-path remapping wrapper, installed the final unsi
 
 The strict installed-payload checker passed against both loose portable and actual ZIP extraction: **41/41** payload files per side, 40 non-main-executable payload files exact, and only the same-length Tauri NSIS/portable build marker differs in the main executable. One expected marker was present in each binary and no counterpart marker was present; normalizing only that marker produced the matching SHA-256 `2a6e8f1d83e44aeac8ae2bd6c9de71031f93b49a2132d260f43e4cfb8b4dd80b`. Node v24.21.0 matched the independent official SHA-256 `ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32`; the five expected PowerShell scripts and license/notice texts were present. Bounded ASCII/UTF-16LE payload scanning found **0** private absolute-path matches. The independent publication scanner passed for **130** files across the install, portable, and ZIP-extracted trees.
 
-Final installer SHA-256: `4ac42366cea51c0e68569fbf47b4bf6a8521b1b47386c4a46d101ebce985ec47`; portable ZIP SHA-256: `da196f434961b4f881d5fe6feece7aee072394cc0248e7e97b37e3a51069d6ba`. Root performed the installation and launch; this audit only read package contents. No model calls or owner restarts were made. Physical Windows reboot persistence and final release approval remain pending.
+Final installer SHA-256: `4ac42366cea51c0e68569fbf47b4bf6a8521b1b47386c4a46d101ebce985ec47`; portable ZIP SHA-256: `da196f434961b4f881d5fe6feece7aee072394cc0248e7e97b37e3a51069d6ba`. Root performed the installation and launch; this audit only read package contents. No model calls or owner restarts were made. Physical Windows reboot persistence was not tested and is explicitly deferred to the next version by the user.
 
 ### Maintenance and pricing interface targeted acceptance — 2026-10-08
 
@@ -149,6 +149,14 @@ Coverage includes v1→v2 migration with a pre-migration SQLite snapshot and pre
 `test/acceptance-statistics.test.mjs` separately exercises public observability summaries: observed request records do not imply a complete request total when provider coverage is missing; turn distributions, context windows, context-long and tier counts stay scoped to their appropriate ledger; and model/tier performance groups report observed turn timing while exact TTFT/decode/model-waiting remain unavailable.
 
 The statistics fixture also separates same-model response/delta/inventory/latest ledgers, proves an unknown-provider response leaves `requestCount` unavailable while reporting a known-provider subset, distinguishes actual long requests from configured context capacity, preserves mode-only metadata without collaboration instructions, and keeps identical model/tier performance rows separate across providers.
+
+## 2026-10-11 — Current compatibility and localization acceptance
+
+The read-only current Codex probe passed all six Doctor checks: protocol, quota, model catalog, Thread read, Goal read and dry-run resume. No turn was sent, and no Goal, database or running Codex process was changed. The active CLI reported `0.162.0-alpha.2`; the installed package is `26.1002.7124.0`, while its inspected ASAR reports app version `26.1002.52244`. The current compatibility source accepted this observed runtime. The quota response reported weekly use at 28% and no five-hour value. The older pinned compatibility-version constants remain unchanged; this live result applies only to the inspected runtime on this date.
+
+`test/acceptance-i18n.test.mjs` passes **4/4**. It covers system-language normalization (`zh-*` to Simplified Chinese, other tags such as `en-GB` to English), manual locale override, non-empty catalog translations and matching placeholders, quality text, formatting, and preservation of unknown IDs/codes. `test/ui-rendering.test.mjs` passes **2/2** with the actual `i18n-core` and React wrapper compiled into its isolated temporary module graph; both production comparison components were rendered in English and Simplified Chinese. Their empty metric/quality states localized correctly, and provider/model IDs and unknown tier keys remained intact. SSR proves component output under each locale; it does not prove the installed Tauri window.
+
+The native Rust suite passed **9/9**, including Windows' real UI-language API probe, locale normalization/override, unchanged unknown identifiers and translated notification title/body coverage. The observed Windows UI language was `zh-CN`. The UI production build passed after adding the real locale modules. Source persists `language` as `auto`/`zh-CN`/`en`, returns the system and resolved locale as derived metadata, broadcasts preference updates across windows, and refreshes tray labels and tooltips; each toast reads the latest preference when shown. Diagnostics now offers a user-triggered test notification marked TEST without changing quota/recovery state. Installed English/Chinese navigation, live tray refresh and actual Windows toast delivery still require Root's runtime QA. The earlier **146/146** full-suite result at `7f4f931` does not include this work.
 
 ### Windows owner-anchor CI timeout correction — 2026-10-08
 

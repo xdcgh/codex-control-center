@@ -1,3 +1,4 @@
+import {t, display, locale, numberText, dateText, errorText, useLocale, setLocalePreferences} from "./i18n";
 import PageBoundary from "./PageBoundary";
 import { RuntimeDiagnostics } from "./RuntimeDiagnostics";
 import { DatabaseRecovery } from "./DatabaseRecovery";
@@ -78,6 +79,9 @@ type Snapshot = {
   lastError: string | null;
 };
 type Prefs = {
+  language?: "auto" | "zh-CN" | "en";
+  systemLocale?: string | null;
+  resolvedLocale?: "zh-CN" | "en";
   theme: "dark" | "light";
   privacy: boolean;
   widgetExpanded: boolean;
@@ -101,22 +105,22 @@ const request = <T,>(method: string, params: unknown = {}): Promise<T> =>
   invoke("core_request", { method, params });
 const number = (value: unknown, digits = 0) =>
   typeof value === "number" && Number.isFinite(value)
-    ? value.toLocaleString(undefined, { maximumFractionDigits: digits })
-    : "Unavailable";
+    ? numberText(value,digits)
+    : t("Unavailable");
 const date = (value: number | null | undefined) =>
-  value ? new Date(value).toLocaleString() : "Unavailable";
+  value ? dateText(value) : t("Unavailable");
 const time = (value: number | null | undefined) =>
   value
-    ? new Date(value).toLocaleTimeString([], {
+    ? new Date(value).toLocaleTimeString(locale(), {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
       })
-    : "Unavailable";
+    : t("Unavailable");
 function countdown(reset: number | null | undefined, now: number) {
-  if (!reset) return "Unavailable";
+  if (!reset) return t("Unavailable");
   const seconds = Math.max(0, Math.floor((reset - now) / 1000));
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m ${seconds % 60}s`;
+  return t("{hours}h {minutes}m {seconds}s",{hours:numberText(Math.floor(seconds/3600)),minutes:numberText(Math.floor((seconds%3600)/60)),seconds:numberText(seconds%60)});
 }
 const phases: Record<string, string> = {
   watching: "Working",
@@ -127,17 +131,18 @@ const phases: Record<string, string> = {
   dispatching: "Resuming",
 };
 function status(task: Task) {
-  if(task.reason==='goal-paused'||task.reason==='manually-interrupted')return 'Manual paused';
-  if(task.reason==='non-quota-error')return 'Error';
-  if(task.reason==='goal-user-confirmation')return 'Needs user';
-  if(task.reason==='goal-complete'||task.reason==='goal-completed')return 'Completed';
-  if(task.phase==='watching'&&['runtime-waiting','goal-between-turns','desktop-loading','latest-turn-unavailable'].includes(task.reason))return 'Waiting';
+  if(task.reason==='goal-paused'||task.reason==='manually-interrupted')return t("Manual paused");
+  if(task.reason==='non-quota-error')return t("Error");
+  if(task.reason==='goal-user-confirmation')return t("Needs user");
+  if(task.reason==='goal-complete'||task.reason==='goal-completed')return t("Completed");
+  if(task.phase==='watching'&&['runtime-waiting','goal-between-turns','desktop-loading','latest-turn-unavailable'].includes(task.reason))return t("Waiting");
   if (task.phase === "inactive" && task.reason === "completed")
-    return "Completed";
-  return phases[task.phase] ?? task.phase;
+    return t("Completed");
+  return display(phases[task.phase] ?? task.phase);
 }
 
 function App() {
+  useLocale();
   const view = new URLSearchParams(location.search).get("view");
   const small = !!view;
   const [s, setSnapshot] = useState<Snapshot | null>(null),
@@ -161,13 +166,13 @@ function App() {
   };
   const preference = async (update: Partial<Prefs>) => {
     try {
-      setPrefs(await invoke("ui_preferences", { update }));
+      const value = await invoke<Prefs>("ui_preferences", { update });setLocalePreferences(value);setPrefs(value);
     } catch (e) {
       setError(String(e));
     }
   };
   useEffect(() => {
-    void (async()=>{for(let i=0;i<200;i++){try{return await invoke<Prefs>('ui_preferences');}catch(e){if(!String(e).includes('app-starting'))throw e;await new Promise(resolve=>setTimeout(resolve,50));}}throw new Error('app-starting-timeout');})().then(setPrefs).catch(e=>setError(String(e)));
+    void (async()=>{for(let i=0;i<200;i++){try{return await invoke<Prefs>('ui_preferences');}catch(e){if(!String(e).includes('app-starting'))throw e;await new Promise(resolve=>setTimeout(resolve,50));}}throw new Error('app-starting-timeout');})().then(value=>{setLocalePreferences(value);setPrefs(value);}).catch(e=>setError(String(e)));
     void request<Snapshot>("snapshot")
       .then(setSnapshot)
       .catch((e) => {const reason=String(e);setError(reason);if(/owner-anchor|configuration|binding|resources-unavailable/.test(reason))setPage('Diagnostics');});
@@ -179,7 +184,7 @@ function App() {
       listen<{ reason: string }>("core/disconnected", (event) =>
         setError(event.payload.reason),
       ),
-      listen<Prefs>("preferences/updated", (event) => setPrefs(event.payload)),
+      listen<Prefs>("preferences/updated", (event) => {setLocalePreferences(event.payload);setPrefs(event.payload);}),
       listen<string>("navigate", (event) => setPage(event.payload)),
     ];
     const clock = setInterval(() => setNow(Date.now()), 1000);
@@ -193,7 +198,7 @@ function App() {
     document.documentElement.dataset.theme = prefs?.theme ?? "dark";
     document.documentElement.dataset.view = view ?? "main";
     if (small && prefs) {
-      void getCurrentWindow().setAlwaysOnTop(prefs.widgetPinned);
+      void getCurrentWindow().setAlwaysOnTop(prefs.widgetPinned).catch(e=>setError(String(e)));
       if (view === "widget")
         void getCurrentWindow().setSize(
           new LogicalSize(310, prefs.widgetExpanded ? 360 : 260),
@@ -217,14 +222,14 @@ function App() {
           onMouseDown={(event) => {
             if((event.target as Element).closest('button'))return;
             if (event.button === 0 && !prefs?.widgetLocked)
-              void getCurrentWindow().startDragging();
+              void getCurrentWindow().startDragging().catch(e=>setError(String(e)));
           }}
         >
           <span className="logo">C</span>
           <strong>Codex</strong>
           <span className={`dot ${s?.quota?.ready ? "good" : "amber"}`} />
           <button
-            title="Hide widget"
+            title={t("Hide widget")}
             onClick={() => {
               void getCurrentWindow().hide();
               void preference({ widgetVisible: false });
@@ -243,58 +248,58 @@ function App() {
           ))}
           <div className="mini-counts">
             <span>
-              <b>{number(running)}</b> Running
+              <b>{number(running)}</b> {t("Running")}
             </span>
             <span>
-              <b>{number(waiting)}</b> Waiting
+              <b>{number(waiting)}</b> {t("Waiting")}
             </span>
           </div>
-          <p className="caption ellipsis">{s?.tasks.find(t=>t.phase==='watching')?.modelId??'Model unavailable'} · Turn output: Unavailable</p>
+          <p className="caption ellipsis">{s?.tasks.find(t=>t.phase==='watching')?.modelId??t("Model unavailable")} {t("· Turn output: Unavailable")}</p>
           {prefs?.widgetExpanded || view === "compact" ? (
             <>
               <p className="caption">
-                5h reset in {countdown(quota(300)?.resetsAt, now)}
+                {t("5h reset in")} {countdown(quota(300)?.resetsAt, now)}
               </p>
               <p className="caption">
-                7d reset in {countdown(quota(10080)?.resetsAt, now)}
+                {t("7d reset in")} {countdown(quota(10080)?.resetsAt, now)}
               </p>
               <p className="mini-task">
                 {s?.tasks.find((t) => t.phase === "watching")?.modelId ??
-                  "Model unavailable"}
+                  t("Model unavailable")}
               </p>
               {!prefs?.privacy && s?.tasks[0]?.title && (
                 <p className="caption ellipsis">{s.tasks[0].title}</p>
               )}
-              <span className="quality">Token rate: Unavailable</span>
+              <span className="quality">{t("Token rate: Unavailable")}</span>
             </>
           ) : null}
-          {error && <p className="error small">{error}</p>}
+          {error && <p className="error small">{errorText(error)}</p>}
         </div>
         <footer className="mini-footer">
-          <button onClick={() => void open("main")}>Dashboard ↗</button>
+          <button onClick={() => void open("main").catch(e=>setError(String(e)))}>{t("Dashboard ↗")}</button>
           <button
-            title="Expand"
+            title={t("Expand")}
             onClick={() =>
               void preference({ widgetExpanded: !prefs?.widgetExpanded })
             }
           >
-            {prefs?.widgetExpanded?'Compact':'Expand'}
+            {prefs?.widgetExpanded?t("Compact"):t("Expand")}
           </button>
           <button
-            title="Lock position"
+            title={t("Lock position")}
             onClick={() =>
               void preference({ widgetLocked: !prefs?.widgetLocked })
             }
           >
-            {prefs?.widgetLocked ? "Locked" : "Drag"}
+            {prefs?.widgetLocked ? t("Locked") : t("Drag")}
           </button>
           <button
-            title="Pin on top"
+            title={t("Pin on top")}
             onClick={() =>
               void preference({ widgetPinned: !prefs?.widgetPinned })
             }
           >
-            {prefs?.widgetPinned ? "Pinned" : "Pin"}
+            {prefs?.widgetPinned ? t("Pinned") : t("Pin")}
           </button>
         </footer>
       </main>
@@ -307,10 +312,10 @@ function App() {
           <span>
             Codex
             <br />
-            <small>Control Center</small>
+            <small>{t("Control Center")}</small>
           </span>
         </a>
-        <div className="nav-label">WORKSPACE</div>
+        <div className="nav-label">{t("WORKSPACE")}</div>
         <nav>
           {[
             "Dashboard",
@@ -328,19 +333,19 @@ function App() {
               onClick={() => setPage(name)}
             >
               <span>{["◈", "☷", "⌁", "◇", "◴", "⚙", "⌘"][i]}</span>
-              {name}
-              {name === "Threads" && waiting ? <small>{waiting}</small> : null}
+              {display(name)}
+              {name === "Threads" && waiting ? <small>{number(waiting)}</small> : null}
             </button>
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <span className="local-badge">● LOCAL FIRST</span>
+          <span className="local-badge">{t("● LOCAL FIRST")}</span>
           <p>
-            No cloud analytics.
+            {t("No cloud analytics.")}
             <br />
-            Your data stays on this PC.
+            {t("Your data stays on this PC.")}
           </p>
-          <small>Unofficial · Not affiliated with OpenAI</small>
+          <small>{t("Unofficial · Not affiliated with OpenAI")}</small>
         </div>
       </aside>
       <section className="workspace">
@@ -348,46 +353,45 @@ function App() {
           <span>
             <span className={`dot ${s && !error ? "good" : "amber"}`} />
             {s && !error
-              ? "Background owner connected"
-              : "Connecting to background owner"}
+              ? t("Background owner connected")
+              : t("Connecting to background owner")}
           </span>
           <div>
             <button
               onClick={() => void preference({ privacy: !prefs?.privacy })}
             >
-              {prefs?.privacy ? "Privacy on" : "Privacy mode"}
+              {prefs?.privacy ? t("Privacy on") : t("Privacy mode")}
             </button>
             <button
               onClick={() => {
-                void open("widget");
+                void open("widget").catch(e=>setError(String(e)));
                 void preference({ widgetVisible: true });
               }}
             >
-              Show widget
+              {t("Show widget")}
             </button>
             <button
               disabled={busy}
               onClick={() => void action(() => request("refresh"))}
             >
-              ↻ Refresh
+              {t("↻ Refresh")}
             </button>
           </div>
         </header>
-        <div className="content"><PageBoundary key={page} page={page}>
+        <div className="content"><PageBoundary key={page} page={display(page)}>
           <div className="page-heading">
             <div>
-              <p className="eyebrow">CODEX / {page.toUpperCase()}</p>
-              <h1>{page}</h1>
+              <p className="eyebrow">CODEX / {display(page)}</p>
+              <h1>{display(page)}</h1>
             </div>
             <span className="updated">
-              Last quota check {time(s?.lastQuotaPollAt)}
+              {t("Last quota check")} {time(s?.lastQuotaPollAt)}
             </span>
           </div>
-          {error && <div className="banner error">{error}</div>}
+          {error && <div className="banner error">{errorText(error)}</div>}
           {s?.compatibility && !s.compatibility.verified && (
             <div className="banner warning">
-              Compatibility not verified. Quota monitoring continues; automatic
-              recovery is in safe mode.
+              {t("Compatibility not verified. Quota monitoring continues; automatic recovery is in safe mode.")}
             </div>
           )}
           {page === "Dashboard" && (
@@ -397,52 +401,52 @@ function App() {
                   <QuotaCard
                     key={minutes}
                     q={quota(minutes)}
-                    title={minutes === 300 ? "5-hour window" : "7-day window"}
+                    title={minutes === 300 ? t("5-hour window") : t("7-day window")}
                     now={now}
                   />
                 ))}
               </div>
               <div className="metric-grid">
                 <Metric
-                  label="Running threads"
+                  label={t("Running threads")}
                   value={number(running)}
-                  note="Observed in Codex Desktop"
+                  note={t("Observed in Codex Desktop")}
                 />
                 <Metric
-                  label="Waiting for quota"
+                  label={t("Waiting for quota")}
                   value={number(waiting)}
-                  note={`Next check in ${s ? Math.max(0, Math.ceil((s.nextQuotaPollAt - now) / 1000)) : "—"}s`}
+                  note={t("Next check in {seconds}s",{seconds:s?numberText(Math.max(0,Math.ceil((s.nextQuotaPollAt-now)/1000))):"—"})}
                 />
                 <Metric
-                  label="Recovery engine"
+                  label={t("Recovery engine")}
                   value={
                     s?.settings.autoResume
-                      ? "Enabled"
+                      ? t("Enabled")
                       : s
-                        ? "Paused"
-                        : "Unavailable"
+                        ? t("Paused")
+                        : t("Unavailable")
                   }
                   note={
                     s?.mode === "execute"
-                      ? "Fresh state checked before every resume"
-                      : "Read-only observation mode"
+                      ? t("Fresh state checked before every resume")
+                      : t("Read-only observation mode")
                   }
                 />
                 <Metric
-                  label="Account plan"
-                  value={s?.quota?.planType ?? "Unavailable"}
+                  label={t("Account plan")}
+                  value={s?.quota?.planType ?? t("Unavailable")}
                   note={
                     s?.quota?.credits
-                      ? `Credits: ${String(s.quota.credits.balance ?? "Unavailable")}`
-                      : "Account identity remains private"
+                      ? t("Credits: {credits}",{credits:typeof s.quota.credits.balance==="number"?numberText(s.quota.credits.balance):String(s.quota.credits.balance??t("Unavailable"))})
+                      : t("Account identity remains private")
                   }
                 />
               </div>
               <section className="panel">
                 <div className="panel-heading">
-                  <h2>Active work</h2>
+                  <h2>{t("Active work")}</h2>
                   <button onClick={() => setPage("Threads")}>
-                    All threads →
+                    {t("All threads →")}
                   </button>
                 </div>
                 <ThreadList
@@ -455,13 +459,13 @@ function App() {
               </section>
               <div className="version-strip">
                 <span>
-                  Codex CLI {s?.compatibility.cliVersion ?? "Unavailable"}
+                  Codex CLI {s?.compatibility.cliVersion ?? t("Unavailable")}
                 </span>
                 <span>
-                  Desktop {s?.compatibility.desktopVersion ?? "Unavailable"}
+                  Desktop {s?.compatibility.desktopVersion ?? t("Unavailable")}
                 </span>
                 <span>
-                  {s?.compatibility.status ?? "Compatibility not checked"}
+                  {display(s?.compatibility.status ?? t("Compatibility not checked"))}
                 </span>
               </div>
             </>
@@ -469,9 +473,9 @@ function App() {
           {page === "Threads" && (
             <section className="panel">
               <div className="panel-heading">
-                <h2>Thread & Goal registry</h2>
+                <h2>{t("Thread & Goal registry")}</h2>
                 <span className="quality">
-                  Original threads · No mouse automation
+                  {t("Original threads · No mouse automation")}
                 </span>
               </div>
               <ThreadList
@@ -513,9 +517,9 @@ function MiniQuota({
 }) {
   return (
     <div className="mini-quota">
-      <b>{label}</b>
-      <div className="meter">
-        <i style={{ width: `${q?.remainingPercent ?? 0}%` }} />
+      <b>{display(label)}</b>
+      <div className={`meter ${q?.remainingPercent==null?"unknown":""}`} aria-label={q?.remainingPercent==null?t("Unavailable"):undefined}>
+        <i style={{ width: q?.remainingPercent == null ? undefined : `${q.remainingPercent}%` }} />
       </div>
       <span>
         {q?.remainingPercent != null ? `${number(q.remainingPercent)}%` : "—"}
@@ -551,10 +555,10 @@ function QuotaCard({
           className={`pill ${remaining != null && remaining <= 10 ? "amber" : ""}`}
         >
           {remaining == null
-            ? "Unavailable"
+            ? t("Unavailable")
             : remaining <= 0
-              ? "Exhausted"
-              : "Available"}
+              ? t("Exhausted")
+              : t("Available")}
         </span>
       </div>
       <div className="quota-main">
@@ -563,7 +567,7 @@ function QuotaCard({
             {remaining == null ? "—" : number(remaining)}
             {remaining != null && <small>%</small>}
           </span>
-          <p>{remaining == null ? "Unavailable" : "remaining"}</p>
+          <p>{remaining == null ? t("Unavailable") : t("remaining")}</p>
         </div>
         <div
           className="ring"
@@ -576,26 +580,26 @@ function QuotaCard({
         >
           <div>
             <b>{q?.usedPercent != null ? `${number(q.usedPercent)}%` : "—"}</b>
-            <small>used</small>
+            <small>{t("used")}</small>
           </div>
         </div>
       </div>
       <p className="caption">
         {elapsed == null
-          ? "Window progress unavailable"
-          : `${number(elapsed)}% of window time elapsed`}
+          ? t("Window progress unavailable")
+          : t("{percent}% of window time elapsed",{percent:number(elapsed)})}
         {elapsed != null &&
           q?.usedPercent != null &&
           q.usedPercent > elapsed + 10 && (
             <span className="budget-ahead">
               {" "}
-              · Usage ahead of uniform time budget
+              {t("· Usage ahead of uniform time budget")}
             </span>
           )}
       </p>
       <div className="card-footer">
         <span>
-          Resets in <b>{countdown(q?.resetsAt, now)}</b>
+          {t("Resets in")} <b>{countdown(q?.resetsAt, now)}</b>
         </span>
         <small>{date(q?.resetsAt)}</small>
       </div>
@@ -637,10 +641,9 @@ function ThreadList({
     return (
       <div className="empty">
         <span>☷</span>
-        <h3>No enrolled threads yet</h3>
+        <h3>{t("No enrolled threads yet")}</h3>
         <p>
-          Active local root threads and quota-stopped work appear here when
-          observed.
+          {t("Active local root threads and quota-stopped work appear here when observed.")}
         </p>
       </div>
     );
@@ -652,30 +655,30 @@ function ThreadList({
           <div className="thread-main">
             <h3>
               {prefs?.privacy
-                ? "Private task"
-                : (task.title ?? "Title unavailable")}
+                ? t("Private task")
+                : (task.title ?? t("Title unavailable"))}
               <span className="kind">
-                {task.kind === "goal" ? "Goal" : "Thread"}
+                {task.kind === "goal" ? t("Goal") : t("Thread")}
               </span>
             </h3>
             <div className="thread-meta">
-              <span>{task.modelId ?? "Model unavailable"}</span>
-              <span>{task.reasoningEffort ?? "Effort unavailable"}</span>
-              <span>{task.serviceTier ?? "Tier unavailable"}</span>
+              <span>{task.modelId ?? t("Model unavailable")}</span>
+              <span>{task.reasoningEffort ?? t("Effort unavailable")}</span>
+              <span>{task.serviceTier ?? t("Tier unavailable")}</span>
               {!prefs?.privacy && (
                 <span className="ellipsis">
-                  {task.workspace ?? "Workspace unavailable"}
+                  {task.workspace ?? t("Workspace unavailable")}
                 </span>
               )}
             </div>
             <span className="thread-id">
-              {prefs?.privacy ? "ID hidden" : task.threadId}
+              {prefs?.privacy ? t("ID hidden") : task.threadId}
             </span>
             {!compact && (
               <p className="caption">
-                Last observed {time(task.lastActivityAt)} · Retries{" "}
-                {task.policy.retryCount}/{task.policy.maxRetries} ·{" "}
-                {task.reason}
+                {t("Last observed")} {time(task.lastActivityAt)} {t("· Retries")}{" "}
+                {number(task.policy.retryCount)}/{number(task.policy.maxRetries)} ·{" "}
+                {display(task.reason)}
               </p>
             )}
             {!compact&&<ThreadDetails task={task} privacy={prefs?.privacy??true}/>}
@@ -689,10 +692,10 @@ function ThreadList({
             {!compact && (
               <>
                 <span className="quality">
-                  {task.policy.neverAutoResume?'Automatic recovery forbidden':task.policy.manualPaused?'Automatic recovery paused':!task.policy.autoResume?'Automatic recovery off':!task.policy.allowAutomaticStart?'Automatic starts blocked':'Automatic recovery allowed'}
+                  {task.policy.neverAutoResume?t("Automatic recovery forbidden"):task.policy.manualPaused?t("Automatic recovery paused"):!task.policy.autoResume?t("Automatic recovery off"):!task.policy.allowAutomaticStart?t("Automatic starts blocked"):t("Automatic recovery allowed")}
                 </span>
                 <select
-                  aria-label="Priority"
+                  aria-label={t("Priority")}
                   value={task.policy.priority}
                   onChange={(e) =>
                     void action(() =>
@@ -703,10 +706,10 @@ function ThreadList({
                     )
                   }
                 >
-                  {["P0 Critical", "P1 High", "P2 Normal", "P3 Background"].map(
+                  {[t("P0 Critical"), t("P1 High"), t("P2 Normal"), t("P3 Background")].map(
                     (p, i) => (
                       <option key={p} value={i}>
-                        {p}
+                        {display(p)}
                       </option>
                     ),
                   )}
@@ -722,7 +725,7 @@ function ThreadList({
                       )
                     }
                   >
-                    Auto {task.policy.autoResume ? "on" : "off"}
+                    {t("Auto")} {task.policy.autoResume ? t("on") : t("off")}
                   </button>
                   <button
                     onClick={() =>
@@ -735,8 +738,8 @@ function ThreadList({
                     }
                   >
                     {task.policy.manualPaused
-                      ? "Unpause auto recovery"
-                      : "Pause auto recovery"}
+                      ? t("Unpause auto recovery")
+                      : t("Pause auto recovery")}
                   </button>
                   <button
                     disabled={
@@ -750,7 +753,7 @@ function ThreadList({
                       )
                     }
                   >
-                    Resume now
+                    {t("Resume now")}
                   </button>
                   <button
                     onClick={() =>
@@ -764,10 +767,10 @@ function ThreadList({
                       )
                     }
                   >
-                    {task.policy.neverAutoResume ? "Allow auto" : "Never auto"}
+                    {task.policy.neverAutoResume ? t("Allow auto") : t("Never auto")}
                   </button>
                 </div>
-                <details className="thread-policy-details"><summary>Recovery policy</summary><label>Allow automatic start <input type="checkbox" checked={task.policy.allowAutomaticStart} onChange={e=>void action(()=>request('thread/policy',{threadId:task.threadId,update:{allowAutomaticStart:e.target.checked}}))}/></label><label>Max retries <input type="number" min="1" defaultValue={task.policy.maxRetries} onBlur={e=>void action(()=>request('thread/policy',{threadId:task.threadId,update:{maxRetries:Number(e.target.value)}}))}/></label><label>Cooldown seconds <input type="number" min="0" defaultValue={task.policy.cooldownSeconds} onBlur={e=>void action(()=>request('thread/policy',{threadId:task.threadId,update:{cooldownSeconds:Number(e.target.value)}}))}/></label><label>Queue order <input type="number" defaultValue={task.policy.order} onBlur={e=>void action(()=>request('thread/policy',{threadId:task.threadId,update:{order:Number(e.target.value)}}))}/></label></details>
+                <details className="thread-policy-details"><summary>{t("Recovery policy")}</summary><label>{t("Allow automatic start")} <input type="checkbox" checked={task.policy.allowAutomaticStart} onChange={e=>void action(()=>request('thread/policy',{threadId:task.threadId,update:{allowAutomaticStart:e.target.checked}}))}/></label><label>{t("Max retries")} <input type="number" min="1" defaultValue={task.policy.maxRetries} onBlur={e=>void action(()=>request('thread/policy',{threadId:task.threadId,update:{maxRetries:Number(e.target.value)}}))}/></label><label>{t("Cooldown seconds")} <input type="number" min="0" defaultValue={task.policy.cooldownSeconds} onBlur={e=>void action(()=>request('thread/policy',{threadId:task.threadId,update:{cooldownSeconds:Number(e.target.value)}}))}/></label><label>{t("Queue order")} <input type="number" defaultValue={task.policy.order} onBlur={e=>void action(()=>request('thread/policy',{threadId:task.threadId,update:{order:Number(e.target.value)}}))}/></label></details>
               </>
             )}
           </div>
@@ -830,9 +833,9 @@ function QuotaHistory({ now }: { now: number }) {
       <section className="panel">
         <div className="panel-heading">
           <div>
-            <h2>Quota history</h2>
+            <h2>{t("Quota history")}</h2>
             <p className="caption">
-              Real local samples · 1-minute default cadence; older retained points are daily means
+              {t("Real local samples · 1-minute default cadence; older retained points are daily means")}
             </p>
           </div>
           <div className="tabs">
@@ -854,14 +857,14 @@ function QuotaHistory({ now }: { now: number }) {
           </div>
         </div>
         {error && <p className="error">{error}</p>}
-        {samples.some(s=>s.pointKind==="daily-mean")&&<p className="banner">Partial historical precision: daily means summarize whole retained days, including days partially outside this range. They are not exact observations or current-speed inputs.</p>}
+        {samples.some(s=>s.pointKind==="daily-mean")&&<p className="banner">{t("Partial historical precision: daily means summarize whole retained days, including days partially outside this range. They are not exact observations or current-speed inputs.")}</p>}
         {samples.length ? (
           <>
             <svg
               viewBox="0 0 1000 300"
               className="history-chart"
               role="img"
-              aria-label="Observed remaining quota over time"
+              aria-label={t("Observed remaining quota over time")}
             >
               {[0, 25, 50, 75, 100].map((v) => (
                 <g key={v}>
@@ -873,7 +876,7 @@ function QuotaHistory({ now }: { now: number }) {
                     className="gridline"
                   />
                   <text x="8" y={255 - v * 2}>
-                    {v}%
+                    {number(v)}%
                   </text>
                 </g>
               ))}
@@ -887,55 +890,54 @@ function QuotaHistory({ now }: { now: number }) {
                   className="reset-marker"
                 />
               ))}
-              {samples.filter(s=>s.pointKind==="daily-mean").map(s=><circle key={`mean:${s.window}:${s.timestamp}`} cx={50+((s.timestamp-start)/(range*3600000))*900} cy={250-s.remaining_percent*2} r="4" fill="none" stroke="currentColor"><title>Daily mean · {s.sourceCountQuality??"aggregate precision"}</title></circle>)}
+              {samples.filter(s=>s.pointKind==="daily-mean").map(s=><circle key={`mean:${s.window}:${s.timestamp}`} cx={50+((s.timestamp-start)/(range*3600000))*900} cy={250-s.remaining_percent*2} r="4" fill="none" stroke="currentColor"><title>{t("Daily mean ·")} {s.sourceCountQuality??t("aggregate precision")}</title></circle>)}
               <polyline points={points(300)} className="series five" />
               <polyline points={points(10080)} className="series week" />
               <text x="50" y="290">
                 {date(start)}
               </text>
               <text x="760" y="290">
-                Now
+                {t("Now")}
               </text>
             </svg>
             <div className="legend">
-              <span className="five">● 5h remaining</span>
-              <span className="week">● 7d remaining</span>
-              <span>┆ Observed reset or window change</span>
+              <span className="five">{t("● 5h remaining")}</span>
+              <span className="week">{t("● 7d remaining")}</span>
+              <span>{t("┆ Observed reset or window change")}</span>
             </div>
           </>
         ) : (
           <div className="empty">
             <span>⌁</span>
-            <h3>No history in this range yet</h3>
+            <h3>{t("No history in this range yet")}</h3>
             <p>
-              Samples accumulate locally while the background owner reads real
-              quota.
+              {t("Samples accumulate locally while the background owner reads real quota.")}
             </p>
           </div>
         )}
       </section>
       <div className="metric-grid">
         <Metric
-          label="Current 5h window average / hour"
-          value={metrics.currentAverage == null ? "Unavailable" : `${number(metrics.currentAverage, 2)}%`}
-          note="Used quota divided by elapsed current-window time"
+          label={t("Current 5h window average / hour")}
+          value={metrics.currentAverage == null ? t("Unavailable") : `${number(metrics.currentAverage, 2)}%`}
+          note={t("Used quota divided by elapsed current-window time")}
         />
         <Metric
-          label="Projected exhaustion"
+          label={t("Projected exhaustion")}
           value={
-            metrics.resetFirst?'Reset expected first':metrics.forecastAt?date(metrics.forecastAt):'Unavailable'
+            metrics.resetFirst?t("Reset expected first"):metrics.forecastAt?date(metrics.forecastAt):t("Unavailable")
           }
-          note="Estimated from the current reset segment; reset caps the projection"
+          note={t("Estimated from the current reset segment; reset caps the projection")}
         />
         <Metric
-          label="Recent 15-minute burn / hour"
-          value={metrics.recentRate==null?'Unavailable':`${number(metrics.recentRate,2)}%`}
-          note="Latest observed trend within the same reset segment"
+          label={t("Recent 15-minute burn / hour")}
+          value={metrics.recentRate==null?t("Unavailable"):`${number(metrics.recentRate,2)}%`}
+          note={t("Latest observed trend within the same reset segment")}
         />
         <Metric
-          label="Selected-range average / hour"
-          value={metrics.selectedRangeBurn==null?'Unavailable':`${number(metrics.selectedRangeBurn,2)}%`}
-          note={`${samples.length} retained samples · ${resetMarkers.length} window changes`}
+          label={t("Selected-range average / hour")}
+          value={metrics.selectedRangeBurn==null?t("Unavailable"):`${number(metrics.selectedRangeBurn,2)}%`}
+          note={t("{samples} retained samples · {changes} window changes",{samples:number(samples.length),changes:number(resetMarkers.length)})}
         />
       </div>
     </>
@@ -954,18 +956,19 @@ function Settings({
   action: (fn: () => Promise<unknown>) => Promise<void>;
 }) {
   const [autostart, setAutostart] = useState(false);
+  const [notificationResult,setNotificationResult]=useState<"sent"|"disabled"|null>(null),[notificationBusy,setNotificationBusy]=useState(false);
   useEffect(() => {
-    void invoke<boolean>("get_autostart").then(setAutostart);
+    void action(async()=>setAutostart(await invoke<boolean>("get_autostart")));
   }, []);
   const set = (key: string, value: unknown) =>
     action(() => request("settings/update", { [key]: value }));
   return (
     <div className="settings-grid">
       <section className="panel">
-        <h2>Recovery & scheduling</h2>
+        <h2>{t("Recovery & scheduling")}</h2>
         <Setting
-          title="Automatic recovery"
-          detail="Resume eligible quota-stopped work after a fresh quota and thread check"
+          title={t("Automatic recovery")}
+          detail={t("Resume eligible quota-stopped work after a fresh quota and thread check")}
         >
           <input
             type="checkbox"
@@ -974,8 +977,8 @@ function Settings({
           />
         </Setting>
         <Setting
-          title="Quota check interval"
-          detail="Independent from history sampling"
+          title={t("Quota check interval")}
+          detail={t("Independent from history sampling")}
         >
           <select
             value={s?.settings.recoveryPollSeconds ?? 10}
@@ -985,12 +988,12 @@ function Settings({
           >
             {[5, 10, 30, 60].map((v) => (
               <option key={v} value={v}>
-                {v} seconds
+                {number(v)} {t("seconds")}
               </option>
             ))}
           </select>
         </Setting>
-        <Setting title="History sample interval" detail="Default 60 seconds">
+        <Setting title={t("History sample interval")} detail={t("Default 60 seconds")}>
           <input
             type="number"
             min="60"
@@ -1001,8 +1004,8 @@ function Settings({
           />
         </Setting>
         <Setting
-          title="Maximum simultaneous recoveries"
-          detail="Running resumes occupy a slot until a terminal turn is observed"
+          title={t("Maximum simultaneous recoveries")}
+          detail={t("Running resumes occupy a slot until a terminal turn is observed")}
         >
           <input
             type="number"
@@ -1015,8 +1018,8 @@ function Settings({
           />
         </Setting>
         <Setting
-          title="Reserve for manual work"
-          detail="P2/P3 work waits at this 5h remaining threshold"
+          title={t("Reserve for manual work")}
+          detail={t("Quota reserve (five-hour window when reported; otherwise reported windows)")}
         >
           <input
             type="number"
@@ -1027,8 +1030,8 @@ function Settings({
           />
         </Setting>
         <Setting
-          title="Maximum safe retries"
-          detail="An uncertain delivery is never replayed"
+          title={t("Maximum safe retries")}
+          detail={t("An uncertain delivery is never replayed")}
         >
           <input
             type="number"
@@ -1038,8 +1041,8 @@ function Settings({
           />
         </Setting>
         <Setting
-          title="Retry cooldown"
-          detail="Applies only to confirmed pre-send failures"
+          title={t("Retry cooldown")}
+          detail={t("Applies only to confirmed pre-send failures")}
         >
           <input
             type="number"
@@ -1050,35 +1053,34 @@ function Settings({
         </Setting>
       </section>
       <section className="panel">
-        <h2>Desktop preferences</h2>
+        <h2>{t("Desktop preferences")}</h2>
+        <Setting title={t("Language")} detail={t("Apply immediately to all windows, tray and notifications")}><select value={prefs?.language??"auto"} onChange={e=>void preference({language:e.target.value as Prefs["language"]})}><option value="auto">{t("Automatic (system language)")}</option><option value="zh-CN">中文</option><option value="en">English</option></select></Setting>
         <Setting
-          title="Start with Windows"
-          detail="Start the tray app at login"
+          title={t("Start with Windows")}
+          detail={t("Start the tray app at login")}
         >
           <input
             type="checkbox"
             checked={autostart}
             onChange={(e) =>
-              void invoke<boolean>("set_autostart", {
-                enabled: e.target.checked,
-              }).then(setAutostart)
+              void action(async()=>setAutostart(await invoke<boolean>("set_autostart", {enabled:e.target.checked})))
             }
           />
         </Setting>
-        <Setting title="Theme" detail="Applies to dashboard and widget">
+        <Setting title={t("Theme")} detail={t("Applies to dashboard and widget")}>
           <select
             value={prefs?.theme ?? "dark"}
             onChange={(e) =>
               void preference({ theme: e.target.value as Prefs["theme"] })
             }
           >
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
+            <option value="dark">{t("Dark")}</option>
+            <option value="light">{t("Light")}</option>
           </select>
         </Setting>
         <Setting
-          title="Privacy mode"
-          detail="Hide task names and private workspace paths"
+          title={t("Privacy mode")}
+          detail={t("Hide task names and private workspace paths")}
         >
           <input
             type="checkbox"
@@ -1087,8 +1089,8 @@ function Settings({
           />
         </Setting>
         <Setting
-          title="Windows notifications"
-          detail="Meaningful state changes; no repeat every poll"
+          title={t("Windows notifications")}
+          detail={t("Meaningful state changes; no repeat every poll")}
         >
           <input
             type="checkbox"
@@ -1098,8 +1100,10 @@ function Settings({
             }
           />
         </Setting>
-        {Object.entries({quotaExhausted:'Quota exhausted',taskWaiting:'Task waiting',quotaRecovered:'Quota recovered',threadResumed:'Thread auto resumed',resumeFailed:'Resume failed / needs attention',unknownVersion:'Unknown Codex version',weeklyLow:'Weekly quota low',naturalCycle:'Completed natural cycle'}).map(([key,title])=><Setting key={key} title={title} detail="Notify once on meaningful evidence changes"><input type="checkbox" disabled={prefs?.notifications===false} checked={prefs?.notificationTypes?.[key]??true} onChange={e=>void preference({notificationTypes:{...prefs?.notificationTypes,[key]:e.target.checked}})}/></Setting>)}
-        <Setting title="Widget opacity" detail="Compact status transparency">
+        <button disabled={notificationBusy} onClick={()=>void action(async()=>{setNotificationBusy(true);setNotificationResult(null);try{const sent=await invoke<boolean>("send_test_notification");setNotificationResult(sent?"sent":"disabled");}finally{setNotificationBusy(false);}})}>{t("Send test notification")}</button>
+        {notificationResult&&<p className="caption" role="status">{notificationResult==="sent"?t("Test notification submitted to Windows. This is not a recovery event."):t("Notifications are disabled. No test notification was sent.")}</p>}
+        {Object.entries({quotaExhausted:t("Quota exhausted"),taskWaiting:t("Task waiting"),quotaRecovered:t("Quota recovered"),threadResumed:t("Thread auto resumed"),resumeFailed:t("Resume failed / needs attention"),unknownVersion:t("Unknown Codex version"),weeklyLow:t("Weekly quota low"),naturalCycle:t("Completed natural cycle")}).map(([key,title])=><Setting key={key} title={title} detail={t("Notify once on meaningful evidence changes")}><input type="checkbox" disabled={prefs?.notifications===false} checked={prefs?.notificationTypes?.[key]??true} onChange={e=>void preference({notificationTypes:{...prefs?.notificationTypes,[key]:e.target.checked}})}/></Setting>)}
+        <Setting title={t("Widget opacity")} detail={t("Compact status transparency")}>
           <input
             type="range"
             min="0.35"
@@ -1111,7 +1115,7 @@ function Settings({
             }
           />
         </Setting>
-        <Setting title="Lock widget position" detail="Prevent dragging">
+        <Setting title={t("Lock widget position")} detail={t("Prevent dragging")}>
           <input
             type="checkbox"
             checked={prefs?.widgetLocked ?? false}
@@ -1121,8 +1125,8 @@ function Settings({
           />
         </Setting>
         <Setting
-          title="Always on top"
-          detail="Pin the widget over other windows"
+          title={t("Always on top")}
+          detail={t("Pin the widget over other windows")}
         >
           <input
             type="checkbox"
@@ -1133,8 +1137,7 @@ function Settings({
           />
         </Setting>
         <p className="caption">
-          Closing a window hides it to the tray. Use the tray menu to exit the
-          UI or stop the background service.
+          {t("Closing a window hides it to the tray. Use the tray menu to exit the UI or stop the background service.")}
         </p>
       </section>
     </div>
@@ -1176,9 +1179,9 @@ function Diagnostics({
       <section className="panel">
         <div className="panel-heading">
           <div>
-            <h2>Compatibility doctor</h2>
+            <h2>{t("Compatibility doctor")}</h2>
             <p className="caption">
-              Read-only protocol, quota, model and selected thread probes
+              {t("Read-only protocol, quota, model and selected thread probes")}
             </p>
           </div>
           <button
@@ -1191,22 +1194,22 @@ function Diagnostics({
               )
             }
           >
-            Run doctor
+            {t("Run doctor")}
           </button>
         </div>
         <div className="diagnostic-grid">
           {Object.entries({
-            CLI: s?.compatibility.cliVersion ?? "Unavailable",
-            Desktop: s?.compatibility.desktopVersion ?? "Unavailable",
-            Compatibility: s?.compatibility.status ?? "Unavailable",
-            Adapter: "Official app-server + verified Desktop IPC",
-            QuotaSource: "Official account/rateLimits/read",
-            Database: "Local SQLite · WAL",
+            CLI: s?.compatibility.cliVersion ?? t("Unavailable"),
+            Desktop: s?.compatibility.desktopVersion ?? t("Unavailable"),
+            Compatibility: display(s?.compatibility.status ?? t("Unavailable")),
+            Adapter: t("Official app-server + verified Desktop IPC"),
+            QuotaSource: t("Official account/rateLimits/read"),
+            Database: t("Local SQLite · WAL"),
             LastQuotaPoll: date(s?.lastQuotaPollAt),
-            RecoveryMode: s?.mode ?? "Unavailable",
+            RecoveryMode: display(s?.mode ?? t("Unavailable")),
           }).map(([key, value]) => (
             <div key={key}>
-              <small>{key}</small>
+              <small>{display(key)}</small>
               <strong>{value}</strong>
             </div>
           ))}
@@ -1216,10 +1219,9 @@ function Diagnostics({
       <section className="panel">
         <div className="panel-heading">
           <div>
-            <h2>Export diagnostics</h2>
+            <h2>{t("Export diagnostics")}</h2>
             <p className="caption">
-              Safe aggregates only. No auth, prompts, account identity, thread
-              IDs or private paths.
+              {t("Safe aggregates only. No auth, prompts, account identity, thread IDs or private paths.")}
             </p>
           </div>
           <button
@@ -1230,12 +1232,12 @@ function Diagnostics({
               })
             }
           >
-            Export redacted report
+            {t("Export redacted report")}
           </button>
         </div>
-        {saved && <p className="caption">Saved locally: {saved}</p>}
+        {saved && <p className="caption">{t("Saved locally:")} {saved}</p>}
       </section>
-      <section className="panel"><div className="panel-heading"><div><h2>Natural quota cycle evidence</h2><p className="caption">Recovery episodes and final Goal outcome are separate. An active Goal remains pending even when its recovery succeeded.</p></div><button onClick={()=>void action(async()=>setNatural(await request('natural/report')))}>Read real cycle report</button></div>{natural!=null&&<pre>{JSON.stringify(natural,null,2)}</pre>}</section>
+      <section className="panel"><div className="panel-heading"><div><h2>{t("Natural quota cycle evidence")}</h2><p className="caption">{t("Recovery episodes and final Goal outcome are separate. An active Goal remains pending even when its recovery succeeded.")}</p></div><button onClick={()=>void action(async()=>setNatural(await request('natural/report')))}>{t("Read real cycle report")}</button></div>{natural!=null&&<pre>{JSON.stringify(natural,null,2)}</pre>}</section>
     </>
   );
 }
@@ -1261,10 +1263,10 @@ const analyticsQuality = (g: AnalyticsGroup) =>
     ...Object.entries(g.missing ?? {}),
   ]
     .filter(([, count]) => count > 0)
-    .map(([reason, count]) => `${reason} (${count})`)
+    .map(([reason, count]) => `${display(reason)} (${number(count)})`)
     .join(", ") ||
-  g.tokenTotalStatus ||
-  "Observed";
+  (g.tokenTotalStatus?display(g.tokenTotalStatus):"") ||
+  t("Observed");
 const baselineGroup=(g:AnalyticsGroup)=>g.ledger.includes('baseline')||String(g.key).startsWith('Unknown (initial thread counter)');
 function TokenAnalytics({ privacy }: { privacy: boolean }) {
   const [groupBy, setGroupBy] = useState("model"),
@@ -1278,13 +1280,12 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
   return (
     <>
       <div className="banner">
-        Estimated API-equivalent cost uses public API pricing. It is not the
-        amount charged by the Codex subscription.
+        {t("Estimated API-equivalent cost uses public API pricing. It is not the amount charged by the Codex subscription.")}
       </div>
       <StatisticsComparison groups={data?.groups??[]} privacy={privacy} groupBy={groupBy}/>
       <section className="panel">
         <div className="panel-heading">
-          <h2>Token usage</h2>
+          <h2>{t("Token usage")}</h2>
           <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
             {[
               "model",
@@ -1300,26 +1301,26 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
               "5h",
               "week",
             ].map((value) => (
-              <option key={value}>{value}</option>
+              <option key={value} value={value}>{display(value)}</option>
             ))}
           </select>
         </div>
         {error ? (
           <p className="error">{error}</p>
-        ) : !data ? (<div className="empty"><h3>Loading local token observations…</h3><p>Reading real indexed telemetry. No empty result is assumed while the request is pending.</p></div>) : data.groups.length ? (
+        ) : !data ? (<div className="empty"><h3>{t("Loading local token observations…")}</h3><p>{t("Reading real indexed telemetry. No empty result is assumed while the request is pending.")}</p></div>) : data.groups.length ? (
           <div className="table-scroll">
             <table>
               <thead>
                 <tr>
-                  <th>Group / ledger</th>
-                  <th>Input</th>
-                  <th>Cached</th>
-                  <th>Cache write</th>
-                  <th>Output</th>
-                  <th>Reasoning</th>
-                  <th>Total</th>
-                  <th>API equivalent</th>
-                  <th>Quality</th>
+                  <th>{t("Group / ledger")}</th>
+                  <th>{t("Input")}</th>
+                  <th>{t("Cached")}</th>
+                  <th>{t("Cache write")}</th>
+                  <th>{t("Output")}</th>
+                  <th>{t("Reasoning")}</th>
+                  <th>{t("Total")}</th>
+                  <th>{t("API equivalent")}</th>
+                  <th>{t("Quality")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1328,7 +1329,7 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
                     <td>
                       {privacy &&
                       ["workspace", "thread", "goal"].includes(groupBy)
-                        ? "Private group"
+                        ? t("Private group")
                         : typeof g.key === "object"
                           ? JSON.stringify(g.key)
                           : String(g.key)}
@@ -1343,20 +1344,20 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
                       "total_tokens",
                     ].map((key) => (
                       <td key={key}>
-                        {baselineGroup(g)?'Not additive':(g.missing?.[key]??0)>0?'Unavailable':number(g.tokens?.[key])}
+                        {baselineGroup(g)?t("Not additive"):(g.missing?.[key]??0)>0?t("Unavailable"):number(g.tokens?.[key])}
                         {g.missing?.[key] > 0 && g.missing[key] < g.samples && (
-                          <small>Known subtotal {number(g.tokens?.[key])}; {g.missing[key]}/{g.samples} samples unavailable</small>
+                          <small>{t("Known subtotal")} {number(g.tokens?.[key])}; {number(g.missing[key])}/{number(g.samples)} {t("samples unavailable")}</small>
                         )}
                       </td>
                     ))}
                     <td>
                       {baselineGroup(g)||g.estimatedUsd == null
-                        ? "Unavailable"
+                        ? t("Unavailable")
                         : `$${number(g.estimatedUsd, 4)}`}
                     </td>
                     <td>
-                      <b>{baselineGroup(g)?'Non-additive inventory':g.pricingStatus}</b>
-                      <small>{baselineGroup(g)?'Inherited or replayed historical counters; excluded from token consumption and costs':analyticsQuality(g)}</small>
+                      <b>{baselineGroup(g)?t("Non-additive inventory"):display(g.pricingStatus)}</b>
+                      <small>{baselineGroup(g)?t("Inherited or replayed historical counters; excluded from token consumption and costs"):analyticsQuality(g)}</small>
                     </td>
                   </tr>
                 ))}
@@ -1365,10 +1366,9 @@ function TokenAnalytics({ privacy }: { privacy: boolean }) {
           </div>
         ) : (
           <div className="empty">
-            <h3>No token observations yet</h3>
+            <h3>{t("No token observations yet")}</h3>
             <p>
-              Only actual complete telemetry is counted. Different accounting
-              ledgers remain separate.
+              {t("Only actual complete telemetry is counted. Different accounting ledgers remain separate.")}
             </p>
           </div>
         )}
@@ -1404,93 +1404,91 @@ function Performance() {
   const value = (key: string) => {
     const amount = metric(key)?.p50;
     return amount == null
-      ? "Unavailable"
-      : `${number(key === "effectiveThroughput" ? amount : amount / 1000, 2)} ${key === "effectiveThroughput" ? "tok/s" : "s"}`;
+      ? t("Unavailable")
+      : `${number(key === "effectiveThroughput" ? amount : amount / 1000, 2)} ${key === "effectiveThroughput" ? t("tok/s") : t("s")}`;
   };
   return (
     <>
       <div className="banner">
-        Turn-level first-output latency and end-to-end throughput describe the
-        whole agent turn, including model calls and tools. Exact model TTFT and
-        decode speed are unavailable.
+        {t("Turn-level first-output latency and end-to-end throughput describe the whole agent turn, including model calls and tools. Exact model TTFT and decode speed are unavailable.")}
       </div>
       <div className="metric-grid">
         <Metric
-          label="Median turn wall time"
+          label={t("Median turn wall time")}
           value={value("wall")}
-          note={`${number(metric("wall")?.samples)} observed turns`}
+          note={t("{turns} observed turns",{turns:number(metric("wall")?.samples)})}
         />
         <Metric
-          label="Median first visible output"
+          label={t("Median first visible output")}
           value={value("firstVisible")}
-          note="Turn-level latency · Recorded timestamps"
+          note={t("Turn-level latency · Recorded timestamps")}
         />
         <Metric
-          label="Median effective throughput"
+          label={t("Median effective throughput")}
           value={value("effectiveThroughput")}
-          note="Rough end-to-end output · Includes tool time"
+          note={t("Rough end-to-end output · Includes tool time")}
         />
         <Metric
-          label="Median observed tool time"
+          label={t("Median observed tool time")}
           value={value("tool")}
-          note="Overlapping tool intervals counted once"
+          note={t("Overlapping tool intervals counted once")}
         />
       </div>
       <PerformanceComparison data={data}/>
       <section className="panel">
-        <h2>Observed performance distribution</h2>
+        <h2>{t("Observed performance distribution")}</h2>
         {error && <p className="error">{error}</p>}
         {data ? (
           <table>
             <thead>
               <tr>
-                <th>Measure</th>
-                <th>Median</th>
+                <th>{t("Measure")}</th>
+                <th>{t("Median")}</th>
                 <th>P95</th>
-                <th>Observed</th>
-                <th>Missing</th>
+                <th>{t("Observed")}</th>
+                <th>{t("Missing")}</th>
               </tr>
             </thead>
             <tbody>
               {Object.entries(data.metrics).map(([key, m]) => (
                 <tr key={key}>
-                  <td>{m.label}</td>
+                  <td>{display(m.label)}</td>
                   <td>
                     {m.p50 == null
-                      ? "Unavailable"
-                      : `${number(key === "effectiveThroughput" ? m.p50 : m.p50 / 1000, 2)} ${key === "effectiveThroughput" ? "tok/s" : "s"}`}
+                      ? t("Unavailable")
+                      : `${number(key === "effectiveThroughput" ? m.p50 : m.p50 / 1000, 2)} ${key === "effectiveThroughput" ? t("tok/s") : t("s")}`}
                   </td>
                   <td>
                     {m.p95 == null
-                      ? "Unavailable"
-                      : `${number(key === "effectiveThroughput" ? m.p95 : m.p95 / 1000, 2)} ${key === "effectiveThroughput" ? "tok/s" : "s"}`}
+                      ? t("Unavailable")
+                      : `${number(key === "effectiveThroughput" ? m.p95 : m.p95 / 1000, 2)} ${key === "effectiveThroughput" ? t("tok/s") : t("s")}`}
                   </td>
                   <td>{number(m.samples)}</td>
                   <td>{number(m.missing)}</td>
                 </tr>
               ))}
               <tr>
-                <td>Exact model TTFT</td>
-                <td colSpan={2}>Unavailable</td>
+                <td>{t("Exact model TTFT")}</td>
+                <td colSpan={2}>{t("Unavailable")}</td>
                 <td colSpan={2}>
-                  Inference start and first sampled token are not exposed
+                  {t("Inference start and first sampled token are not exposed")}
                 </td>
               </tr>
               <tr>
-                <td>Exact decode speed</td>
-                <td colSpan={2}>Unavailable</td>
+                <td>{t("Exact decode speed")}</td>
+                <td colSpan={2}>{t("Unavailable")}</td>
                 <td colSpan={2}>
-                  Individual model decode timing is not exposed
+                  {t("Individual model decode timing is not exposed")}
                 </td>
               </tr>
             </tbody>
           </table>
         ) : (
           <div className="empty">
-            <h3>Waiting for real performance samples</h3>
+            <h3>{t("Waiting for real performance samples")}</h3>
           </div>
         )}
-        <p className="caption">{data?.clock ?? "No timing observations yet"}</p>
+        <p className="caption">{data?.clock?display(data.clock):t("No timing observations yet")}</p>
       </section>
     </>
   );

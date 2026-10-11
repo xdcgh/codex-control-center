@@ -829,3 +829,5 @@ td small {
 }
 
 .policy-editor{width:100%;min-height:300px;font-family:monospace;}
+.meter.unknown { background: repeating-linear-gradient(135deg,var(--border) 0 4px,transparent 4px 8px); }
+.meter.unknown > i { display: none; }

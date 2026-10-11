@@ -1,6 +1,6 @@
 # Progress
 
-Updated: 2026-10-08 (Asia/Shanghai). Source checkpoints, fixtures, installed-app probes and complete natural cycles are separate evidence claims.
+Updated: 2026-10-11 (Asia/Shanghai). Source checkpoints, fixtures, installed-app probes and complete natural cycles are separate evidence claims. The user deferred physical Windows-reboot acceptance to the next version and added Chinese/English language support to this version.
 
 ## Evidence
 
@@ -14,8 +14,10 @@ Updated: 2026-10-08 (Asia/Shanghai). Source checkpoints, fixtures, installed-app
 | Stack decision | Tauri 2 + Rust + React/TypeScript + existing Node sidecar | ADR accepted; no measured memory claim |
 | Publication surface scan | PASS: Gitleaks 8.30.1 history and working files, private-path review | Initial source import; repeat for changed stages |
 | Remote CI | PASS on `2facad5`: Windows/Linux tests and publication security | https://github.com/xdcgh/codex-control-center/actions/runs/37637067501; later changes require new CI |
-| Core v2 headless suite | PASS: 143/143, no skips, at the statistics/network/build-security checkpoint | Temporary SQLite/worker/native-helper acceptance; fixture adapters remain simulated |
-| Native notification tests | PASS: 3/3 | Independent controls, transition/event deduplication and rejection of incomplete/simulated natural completion |
+| Core v2 headless suite | PASS: 160/160, no skips, at the bilingual/compatibility checkpoint | Temporary SQLite/worker/native-helper acceptance; fixture adapters remain simulated |
+| Native locale/notification tests | PASS: 9/9 | System locale, overrides, eight translated events, transition deduplication, per-cycle completion and explicit TEST notification |
+| Chinese / English interface | Implemented: 397 UI strings, native tray/notifications, automatic Windows UI language, persisted override and shared window updates | Independent language 4/4 and real bilingual rendering 2/2 passed; installed runtime verification follows rebuilt package |
+| Current Codex compatibility | PASS: six read-only Doctor checks on CLI 0.162.0-alpha.2 / Desktop internal 26.1002.52244 | Exact bundle/version registry; current service returns weekly-only with 5h unavailable, never inferred as zero |
 | Frontend build | PASS | TypeScript check and embedded production assets; not a runtime acceptance substitute |
 | Core v2 live execution | ACTIVE: legacy gracefully stopped, disabled and backed up; records and delivery intents imported | One Core writer; original Desktop backend retained |
 | Core v2 scheduler | Priority/reserve/concurrency/cooldown/retries/manual policy implemented and tested | ACK lag and new-Turn lifecycle keep concurrency slots occupied |
@@ -43,4 +45,4 @@ The main agent coordinates implementation, integration, Git preservation, and ac
 
 The installed legacy watchdog is gracefully stopped and its login task disabled, with source, original state and task XML backed up privately. Core v2 preserves the imported send ledger and records. Startup testing migrated the owned development task to the GUI login entry: the task is disabled while its current Core run continues, and the GUI reuses that owner. A second GUI instance did not create another execution process.
 
-Remaining work includes final installed GUI/package refresh and byte scans, actual tray interaction, physical Windows restart and natural-cycle terminal evidence. See the full 34-section audit in `docs/acceptance-audit.md`. The user-selected reboot time is still pending; no system restart has been initiated.
+Remaining work includes final bilingual installed GUI/package refresh and byte scans, actual tray/notification interaction, natural-cycle terminal evidence and release publication. See the requirement audit in `docs/acceptance-audit.md`. Physical Windows reboot is explicitly deferred to the next version; it is not a blocker for this version.
